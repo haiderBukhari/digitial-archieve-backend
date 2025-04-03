@@ -82,7 +82,7 @@ app.get('/companies/:id', async (req, res) => {
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id']), async (req, res) => {
   const { data, error } = await supabase.from('companies').insert([req.body]).select();
   if (error) return res.status(400).json(error);
-  await sendWelcomeEmail(req.body.companyName, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}/login`)
+  await sendWelcomeEmail(req.body.name, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}/login`)
   res.status(201).json(data);
 });
 
