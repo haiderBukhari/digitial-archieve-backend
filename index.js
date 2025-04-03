@@ -4,7 +4,6 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import cors from 'cors'
 
-cors({origin: '*'})
 config();
 
 const supabase = createClient(
@@ -14,6 +13,7 @@ const supabase = createClient(
 
 const app = express();
 app.use(express.json());
+app.use(cors({origin: '*'}))
 const PORT = process.env.PORT || 3000;
 
 // 🌐 Health check
