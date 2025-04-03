@@ -190,7 +190,7 @@ app.post('/send-invoice/:companyId', async (req, res) => {
   `;
 
   const mailOptions = {
-    from: process.env.SERVICE,
+    from: process.env.EMAIL_HOST,
     to: company.contact_email,
     subject,
     html: emailBody,
@@ -250,7 +250,7 @@ const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
   `;
 
   const mailOptions = {
-    from: process.env.SERVICE,
+    from: process.env.EMAIL_HOST,
     to: email,
     subject,
     html: emailBody,
