@@ -207,7 +207,6 @@ app.post('/send-invoice/:companyId', async (req, res) => {
 });
 
 const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
-
   if (!companyName || !email || !password || !loginLink) {
     return { error: 'Missing required fields.' };
   }
@@ -256,16 +255,16 @@ const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
     html: emailBody,
   };
 
-  transporter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      console.error('Error sending welcome email:', error);
-      return { error: 'Failed to send welcome email' };
-    } else {
-      console.log('Welcome email sent successfully:', info.response);
-      return { message: 'Welcome email sent successfully.' };
-    }
-  });
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Welcome email sent successfully:', info.response);
+    return { message: 'Welcome email sent successfully.' };
+  } catch (error) {
+    console.error('Error sending welcome email:', error);
+    return { error: 'Failed to send welcome email' };
+  }
 };
+
 
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
