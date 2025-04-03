@@ -149,9 +149,9 @@ app.post('/send-invoice/:companyId', async (req, res) => {
   }
 
   const transporter = nodemailer.createTransport({
-    port: 587,
+    port: 465,
     host: 'smtp.gmail.com',
-    secure: false,
+    secure: true,
     auth: {
       user: process.env.SERVICE,
       pass: process.env.ApplicationPassword,
@@ -191,7 +191,7 @@ app.post('/send-invoice/:companyId', async (req, res) => {
     html: emailBody,
   };
 
-  transporter.sendMail(mailOptions, (error, info) => {
+  await transporter.sendMail(mailOptions, (error, info) => {
     if (error) {
       console.error('Error sending email:', error);
       return res.status(500).json({ error: 'Failed to send email' });
