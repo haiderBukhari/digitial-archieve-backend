@@ -135,7 +135,7 @@ app.delete('/users/:id', async (req, res) => {
 
 //invoices
 
-app.get('/send-invoice/:companyId', async (req, res) => {
+app.post('/send-invoice/:companyId', async (req, res) => {
   const companyId = req.params.companyId;
 
   const { data: company, error } = await supabase
