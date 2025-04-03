@@ -135,7 +135,7 @@ app.delete('/users/:id', async (req, res) => {
 
 //invoices
 
-app.post('/send-invoice/:companyId', async (req, res) => {
+app.get('/send-invoice/:companyId', async (req, res) => {
   const companyId = req.params.companyId;
 
   const { data: company, error } = await supabase
@@ -153,15 +153,16 @@ app.post('/send-invoice/:companyId', async (req, res) => {
   }
 
   const transporter = nodemailer.createTransport({
-    port: 465,
-    host: 'smtp.gmail.com',
-    secure: true,
+    service: "gmail",
     auth: {
-      user: process.env.SERVICE,
-      pass: process.env.ApplicationPassword,
+      type: "OAuth2",
+      user: process.env.EMAIL_HOST,
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.OAUTH_REFRESH_TOKEN,
     },
   });
-
+  
   const subject = `Invoice Summary - ${company.name}`;
 
   const emailBody = `
@@ -212,12 +213,13 @@ const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
   }
 
   const transporter = nodemailer.createTransport({
-    port: 587,
-    host: 'smtp.gmail.com',
-    secure: false,
+    service: "gmail",
     auth: {
-      user: process.env.SERVICE,
-      pass: process.env.ApplicationPassword,
+      type: "OAuth2",
+      user: process.env.EMAIL_HOST,
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.OAUTH_REFRESH_TOKEN,
     },
   });
 
