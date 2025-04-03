@@ -201,5 +201,65 @@ app.get('/send-invoice/:companyId', async (req, res) => {
   });
 });
 
+app.post('/send-welcome', async (req, res) => {
+  const { companyName, email, password, loginLink } = req.body;
+  if (!companyName || !email || !password || !loginLink) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+
+  const transporter = nodemailer.createTransport({
+    port: 587,
+    host: 'smtp.gmail.com',
+    secure: false,
+    auth: {
+      user: process.env.SERVICE,
+      pass: process.env.ApplicationPassword,
+    },
+  });
+
+  const subject = `Welcome to Talo Innovations – ${companyName}`;
+
+  const emailBody = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+      <div style="background-color: #22BC66; padding: 20px; text-align: center;">
+        <h1 style="color: #fff; margin: 0;">Talo Innovations</h1>
+      </div>
+      <div style="padding: 20px; color: #333;">
+        <h2>Welcome ${companyName}!</h2>
+        <p>Your company account has been successfully created.</p>
+        <p>Here are your login credentials:</p>
+        <ul>
+          <li><strong>Email:</strong> ${email}</li>
+          <li><strong>Password:</strong> ${password}</li>
+        </ul>
+        <div style="text-align: center; margin: 20px 0;">
+          <a href="${loginLink}" style="background-color: #22BC66; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-size: 16px;">
+            Login Now
+          </a>
+        </div>
+        <p>If you have any questions, feel free to contact our support team.</p>
+        <p>Cheers,<br>The Talo Innovations Team</p>
+      </div>
+    </div>
+  `;
+
+  const mailOptions = {
+    from: process.env.SERVICE,
+    to: email,
+    subject,
+    html: emailBody,
+  };
+
+  transporter.sendMail(mailOptions, (error, info) => {
+    if (error) {
+      console.error('Error sending welcome email:', error);
+      return res.status(500).json({ error: 'Failed to send welcome email' });
+    } else {
+      console.log('Welcome email sent successfully:', info.response);
+      return res.status(200).json({ message: 'Welcome email sent successfully.' });
+    }
+  });
+});
+
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
