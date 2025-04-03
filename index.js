@@ -140,7 +140,11 @@ app.post('/send-invoice/:companyId', async (req, res) => {
 
   const { data: company, error } = await supabase
     .from('companies')
-    .select(`id, name, contact_email, status, storage_assigned, documents_viewed, documents_downloaded, documents_scanned, documents_indexed, documents_qa_passed, invoice_value_total`)
+    .select(`
+      id, name, contact_email, status, storage_assigned,
+      documents_viewed, documents_downloaded, documents_scanned,
+      documents_indexed, documents_qa_passed, invoice_value_total
+    `)
     .eq('id', companyId)
     .single();
 
@@ -191,15 +195,14 @@ app.post('/send-invoice/:companyId', async (req, res) => {
     html: emailBody,
   };
 
-  await transporter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      console.error('Error sending email:', error);
-      return res.status(500).json({ error: 'Failed to send email' });
-    } else {
-      console.log('Email sent successfully:', info.response);
-      return res.status(200).json({ message: 'Invoice email sent successfully.' });
-    }
-  });
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Email sent successfully:', info.response);
+    return res.status(200).json({ message: 'Invoice email sent successfully.' });
+  } catch (err) {
+    console.error('Error sending email:', err);
+    return res.status(500).json({ error: 'Failed to send email' });
+  }
 });
 
 const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
