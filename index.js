@@ -82,6 +82,7 @@ app.get('/companies/:id', async (req, res) => {
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id']), async (req, res) => {
   const { data, error } = await supabase.from('companies').insert([req.body]).select();
   if (error) return res.status(400).json(error);
+  await sendWelcomeEmail(req.body.companyName, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}/login`)
   res.status(201).json(data);
 });
 
@@ -201,10 +202,10 @@ app.get('/send-invoice/:companyId', async (req, res) => {
   });
 });
 
-app.post('/send-welcome', async (req, res) => {
-  const { companyName, email, password, loginLink } = req.body;
+const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
+
   if (!companyName || !email || !password || !loginLink) {
-    return res.status(400).json({ error: 'Missing required fields.' });
+    return { error: 'Missing required fields.' };
   }
 
   const transporter = nodemailer.createTransport({
@@ -253,13 +254,13 @@ app.post('/send-welcome', async (req, res) => {
   transporter.sendMail(mailOptions, (error, info) => {
     if (error) {
       console.error('Error sending welcome email:', error);
-      return res.status(500).json({ error: 'Failed to send welcome email' });
+      return { error: 'Failed to send welcome email' };
     } else {
       console.log('Welcome email sent successfully:', info.response);
-      return res.status(200).json({ message: 'Welcome email sent successfully.' });
+      return { message: 'Welcome email sent successfully.' };
     }
   });
-});
+};
 
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
