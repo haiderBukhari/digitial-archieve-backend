@@ -48,13 +48,13 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
       userId: user.id,
       companyId: user.company_id,
       role: user.role,
-      name: name
+      name: user.name
     },
     process.env.JWT_SECRET,
     { expiresIn: '1d' }
   );
 
-  res.json({ token:token, role: user.role, userId: user.id, companyId: user.company_id })
+  res.json({ token:token, role: user.role, userId: user.id, companyId: user.company_id, name: user.name });
 });
 
 app.post('/verify-token', async (req, res) => {
