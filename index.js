@@ -98,23 +98,44 @@ app.delete('/companies/:id', async (req, res) => {
   res.sendStatus(204);
 });
 
-// -------------------------
-// 👤 USERS ENDPOINTS
-// -------------------------
 
+// -------------------------
+// 📁 DOCUMENT TAGS
+// -------------------------
+app.get('/document-tags', async (req, res) => {
+  const { data, error } = await supabase.from('document_tags').select('*');
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
+app.post('/document-tags', verifyStructure(['title', 'properties']), async (req, res) => {
+  const { data, error } = await supabase.from('document_tags').insert([req.body]).select();
+  if (error) return res.status(400).json(error);
+  res.status(201).json(data);
+});
+
+app.put('/document-tags/:id', async (req, res) => {
+  const { data, error } = await supabase.from('document_tags').update(req.body).eq('id', req.params.id).select();
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
+app.delete('/document-tags/:id', async (req, res) => {
+  const { error } = await supabase.from('document_tags').delete().eq('id', req.params.id);
+  if (error) return res.status(400).json(error);
+  res.sendStatus(204);
+});
+
+// -------------------------
+// 📁 USERS
+// -------------------------
 app.get('/users', async (req, res) => {
   const { data, error } = await supabase.from('users').select('*');
   if (error) return res.status(400).json(error);
   res.json(data);
 });
 
-app.get('/users/:id', async (req, res) => {
-  const { data, error } = await supabase.from('users').select('*').eq('id', req.params.id).single();
-  if (error) return res.status(400).json(error);
-  res.json(data);
-});
-
-app.post('/users', verifyStructure(['company_id', 'name', 'email', 'password_hash', 'role']), async (req, res) => {
+app.post('/users', verifyStructure(['name', 'email', 'phone', 'role', 'password']), async (req, res) => {
   const { data, error } = await supabase.from('users').insert([req.body]).select();
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
@@ -132,6 +153,47 @@ app.delete('/users/:id', async (req, res) => {
   res.sendStatus(204);
 });
 
+// -------------------------
+// 📁 DOCUMENTS
+// -------------------------
+app.get('/documents', async (req, res) => {
+  const { data, error } = await supabase.from('documents').select('*');
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
+app.post('/documents', verifyStructure(['url', 'company_id', 'title', 'progress', 'tag_id', 'tag_name', 'added_by', 'role', 'properties']), async (req, res) => {
+  const { data, error } = await supabase.from('documents').insert([req.body]).select();
+  if (error) return res.status(400).json(error);
+  res.status(201).json(data);
+});
+
+app.put('/documents/:id', async (req, res) => {
+  const { data, error } = await supabase.from('documents').update(req.body).eq('id', req.params.id).select();
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
+app.delete('/documents/:id', async (req, res) => {
+  const { error } = await supabase.from('documents').delete().eq('id', req.params.id);
+  if (error) return res.status(400).json(error);
+  res.sendStatus(204);
+});
+
+// -------------------------
+// 📁 DOCUMENT EDIT HISTORY
+// -------------------------
+app.get('/document-history', async (req, res) => {
+  const { data, error } = await supabase.from('document_edit_history').select('*');
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
+app.post('/document-history', verifyStructure(['document_id', 'edited_by', 'role', 'edit_description']), async (req, res) => {
+  const { data, error } = await supabase.from('document_edit_history').insert([req.body]).select();
+  if (error) return res.status(400).json(error);
+  res.status(201).json(data);
+});
 
 //invoices
 
