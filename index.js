@@ -79,7 +79,7 @@ app.get('/companies/:id', async (req, res) => {
   res.json(data);
 });
 
-app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id']), async (req, res) => {
+app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
   // Check if company with the same email already exists
   const { data: existingCompany, error: checkError } = await supabase
     .from('companies')
@@ -91,11 +91,29 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
     return res.status(409).json({ error: 'Company already exists with this email.' });
   }
 
-  const { data, error } = await supabase.from('companies').insert([req.body]).select();
-  if (error) return res.status(400).json(error);
+  const { data: companyData, error: createError } = await supabase
+    .from('companies')
+    .insert([req.body])
+    .select();
+
+  if (createError) return res.status(400).json(createError);
+  const company = companyData[0];
+
+  const { error: userError } = await supabase.from('users').insert([{
+    name: req.body.admin_name,
+    email: req.body.contact_email,
+    phone: '',
+    role: 'Owner',
+    password: req.body.password_hash,
+    company_id: company.id,
+    status: 'active'
+  }]);
+
+  if (userError) return res.status(500).json({ error: 'Company created but failed to create admin user.' });
 
   await sendWelcomeEmail(req.body.name, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}/login`);
-  res.status(201).json(data);
+
+  res.status(201).json(companyData);
 });
 
 
