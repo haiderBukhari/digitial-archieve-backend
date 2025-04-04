@@ -3,6 +3,7 @@ import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
+import jwt from 'jsonwebtoken'
 import cors from 'cors'
 
 config();
@@ -28,6 +29,32 @@ const verifyStructure = (requiredFields) => (req, res, next) => {
   }
   next();
 };
+
+app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
+  const { email, password } = req.body;
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('id, email, password, company_id')
+    .eq('email', email)
+    .single();
+
+  if (error || !user || user.password !== password) {
+    return res.status(401).json({ error: 'Invalid email or password.' });
+  }
+
+  const token = jwt.sign(
+    {
+      userId: user.id,
+      companyId: user.company_id,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '1d' }
+  );
+
+  res.json({ token });
+});
+
 
 // -------------------------
 // 📁 PLANS ENDPOINTS
