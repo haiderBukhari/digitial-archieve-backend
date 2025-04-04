@@ -172,7 +172,7 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
 
   if (userError) return res.status(500).json({ error: 'Company created but failed to create admin user.' });
 
-  await sendWelcomeEmail(req.body.name, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}/login`);
+  await sendWelcomeEmail(req.body.name, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}`);
 
   res.status(201).json(companyData);
 });
