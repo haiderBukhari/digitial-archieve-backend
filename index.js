@@ -194,16 +194,51 @@ app.delete('/companies/:id', async (req, res) => {
 // -------------------------
 // 📁 DOCUMENT TAGS
 // -------------------------
-app.get('/document-tags', async (req, res) => {
-  const { data, error } = await supabase.from('document_tags').select('*');
-  if (error) return res.status(400).json(error);
-  res.json(data);
-});
+app.post('/document-tags', authenticateToken, verifyStructure(['title', 'properties']), async (req, res) => {
+  const { title, properties } = req.body;
+  const company_id = req.user.companyId;
 
-app.post('/document-tags', verifyStructure(['title', 'properties']), async (req, res) => {
-  const { data, error } = await supabase.from('document_tags').insert([req.body]).select();
+  const { data, error } = await supabase.from('document_tags').insert([{
+    title,
+    properties,
+    company_id
+  }]).select();
+
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
+});
+
+app.get('/document-tags', authenticateToken, async (req, res) => {
+  const company_id = req.user.companyId;
+
+  const { data: tags, error: tagError } = await supabase
+    .from('document_tags')
+    .select('*')
+    .eq('company_id', company_id);
+
+  if (tagError) return res.status(400).json(tagError);
+
+  const enrichedTags = await Promise.all(tags.map(async (tag) => {
+    const { count: complete_documents } = await supabase
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('tag_id', tag.id)
+      .eq('progress', 'Complete');
+
+    const { count: incomplete_documents } = await supabase
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('tag_id', tag.id)
+      .eq('progress', 'Incomplete');
+
+    return {
+      ...tag,
+      complete_documents: complete_documents || 0,
+      incomplete_documents: incomplete_documents || 0,
+    };
+  }));
+
+  res.json(enrichedTags);
 });
 
 app.put('/document-tags/:id', async (req, res) => {
