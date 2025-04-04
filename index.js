@@ -35,7 +35,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
 
   const { data: user, error } = await supabase
     .from('users')
-    .select('id, email, password, company_id, role')
+    .select('id, email, password, company_id, role, name')
     .eq('email', email)
     .single();
 
@@ -47,13 +47,14 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     {
       userId: user.id,
       companyId: user.company_id,
-      role: user.role
+      role: user.role,
+      name: name
     },
     process.env.JWT_SECRET,
     { expiresIn: '1d' }
   );
 
-  res.json({ token:token, role: user.role })
+  res.json({ token:token, role: user.role, userId: user.id, companyId: user.company_id })
 });
 
 app.post('/verify-token', async (req, res) => {
