@@ -334,6 +334,17 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   res.status(201).json(data);
 });
 
+app.get('/documents/:id', async (req, res) => {
+  const documentId = req.params.id;
+  const { data, error } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('id', documentId)
+    .single();
+
+  if (error || !data) return res.status(404).json({ error: 'Document not found' });
+  res.json(data);
+});
 
 app.put('/documents/:id', async (req, res) => {
   const { data, error } = await supabase.from('documents').update(req.body).eq('id', req.params.id).select();
