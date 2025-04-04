@@ -30,6 +30,22 @@ const verifyStructure = (requiredFields) => (req, res, next) => {
   next();
 };
 
+// 🔐 JWT Auth Middleware
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Token missing from Authorization header.' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).json({ error: 'Invalid or expired token.' });
+    req.user = decoded; // Attach decoded payload to request
+    next();
+  });
+};
+
 app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
   const { email, password } = req.body;
 
@@ -211,8 +227,21 @@ app.get('/users', async (req, res) => {
   res.json(data);
 });
 
-app.post('/users', verifyStructure(['name', 'email', 'phone', 'role', 'password']), async (req, res) => {
-  const { data, error } = await supabase.from('users').insert([req.body]).select();
+app.post('/users', authenticateToken, verifyStructure(['name', 'email', 'phone', 'role', 'password']), async (req, res) => {
+  const { name, email, phone, role, password } = req.body;
+  const company_id = req.user.companyId;
+
+  const { data, error } = await supabase.from('users').insert([{
+    name,
+    email,
+    phone,
+    role,
+    password,
+    company_id,
+    documents_reviewed: 0,
+    status: 'active'
+  }]).select();
+
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
 });
