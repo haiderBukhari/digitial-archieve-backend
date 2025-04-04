@@ -309,11 +309,31 @@ app.get('/documents', async (req, res) => {
   res.json(data);
 });
 
-app.post('/documents', verifyStructure(['url', 'company_id', 'title', 'progress', 'tag_id', 'tag_name', 'added_by', 'role', 'properties']), async (req, res) => {
-  const { data, error } = await supabase.from('documents').insert([req.body]).select();
+app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag_name', 'file_id']), async (req, res) => {
+  const { url, tag_id, tag_name, file_id } = req.body;
+  const company_id = req.user.companyId;
+  const added_by = req.user.userId;
+  const role = req.user.role;
+
+  const document = {
+    url,
+    company_id,
+    title: tag_name,
+    progress: 'Incomplete',
+    tag_id,
+    tag_name,
+    is_published: false,
+    added_by,
+    role,
+    properties: [],
+    file_id
+  };
+
+  const { data, error } = await supabase.from('documents').insert([document]).select();
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
 });
+
 
 app.put('/documents/:id', async (req, res) => {
   const { data, error } = await supabase.from('documents').update(req.body).eq('id', req.params.id).select();
