@@ -56,6 +56,22 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
   res.json({ token:token, role: user.role })
 });
 
+app.post('/verify-token', async (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided.' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    res.status(200).json({ valid: true, user: decoded });
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid or expired token.' });
+  }
+});
+
 
 // -------------------------
 // 📁 PLANS ENDPOINTS
