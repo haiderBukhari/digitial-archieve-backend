@@ -80,11 +80,24 @@ app.get('/companies/:id', async (req, res) => {
 });
 
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id']), async (req, res) => {
+  // Check if company with the same email already exists
+  const { data: existingCompany, error: checkError } = await supabase
+    .from('companies')
+    .select('id')
+    .eq('contact_email', req.body.contact_email)
+    .single();
+
+  if (existingCompany) {
+    return res.status(409).json({ error: 'Company already exists with this email.' });
+  }
+
   const { data, error } = await supabase.from('companies').insert([req.body]).select();
   if (error) return res.status(400).json(error);
-  await sendWelcomeEmail(req.body.name, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}/login`)
+
+  await sendWelcomeEmail(req.body.name, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}/login`);
   res.status(201).json(data);
 });
+
 
 app.put('/companies/:id', async (req, res) => {
   const { data, error } = await supabase.from('companies').update(req.body).eq('id', req.params.id).select();
