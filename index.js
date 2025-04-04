@@ -221,8 +221,15 @@ app.delete('/document-tags/:id', async (req, res) => {
 // -------------------------
 // 📁 USERS
 // -------------------------
-app.get('/users', async (req, res) => {
-  const { data, error } = await supabase.from('users').select('*');
+app.get('/users', authenticateToken, async (req, res) => {
+  const { companyId, userId } = req.user;
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('company_id', companyId)
+    .neq('id', userId);
+
   if (error) return res.status(400).json(error);
   res.json(data);
 });
