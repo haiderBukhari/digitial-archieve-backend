@@ -303,8 +303,14 @@ app.delete('/users/:id', async (req, res) => {
 // -------------------------
 // 📁 DOCUMENTS
 // -------------------------
-app.get('/documents', async (req, res) => {
-  const { data, error } = await supabase.from('documents').select('*');
+app.get('/documents', authenticateToken, async (req, res) => {
+  const company_id = req.user.companyId;
+
+  const { data, error } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('company_id', company_id);
+
   if (error) return res.status(400).json(error);
   res.json(data);
 });
