@@ -129,7 +129,11 @@ app.delete('/plans/:id', async (req, res) => {
 // -------------------------
 
 app.get('/companies', async (req, res) => {
-  const { data, error } = await supabase.from('companies').select('*');
+  const { data, error } = await supabase
+    .from('companies')
+    .select('*')
+    .order('created_at', { ascending: false });
+
   if (error) return res.status(400).json(error);
   res.json(data);
 });
