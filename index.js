@@ -340,7 +340,7 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
     title: tag_name,
     progress: 'Incomplete',
     tag_id,
-    progress_number: (role === 'Owner' || role === 'Manager') ? 2 : role === 'Scanner' ? 2 : role === 'Indexer' ? 3 : 3,
+    progress_number: (role === 'Owner' || role === 'Manager') ? 1 : role === 'Scanner' ? 1 : 1,
     indexer_passed_id: null,
     qa_passed_id: null,
     passed_to: null,
