@@ -315,6 +315,19 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   const added_by = req.user.userId;
   const role = req.user.role;
 
+  const { data: tagData, error: tagError } = await supabase
+    .from('document_tags')
+    .select('properties')
+    .eq('id', tag_id)
+    .single();
+
+  if (tagError || !tagData) return res.status(400).json({ error: 'Invalid tag selected.' });
+
+  const propertiesWithValues = tagData.properties.map(prop => ({
+    ...prop,
+    value: ''
+  }));
+
   const document = {
     url,
     company_id,
@@ -325,7 +338,7 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
     is_published: false,
     added_by,
     role,
-    properties: [],
+    properties: propertiesWithValues,
     file_id
   };
 
@@ -333,6 +346,7 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
 });
+
 
 app.get('/documents/:id', async (req, res) => {
   const documentId = req.params.id;
