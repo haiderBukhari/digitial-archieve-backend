@@ -181,7 +181,6 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
   res.status(201).json(companyData);
 });
 
-
 app.put('/companies/:id', async (req, res) => {
   const { data, error } = await supabase.from('companies').update(req.body).eq('id', req.params.id).select();
   if (error) return res.status(400).json(error);
@@ -193,7 +192,6 @@ app.delete('/companies/:id', async (req, res) => {
   if (error) return res.status(400).json(error);
   res.sendStatus(204);
 });
-
 
 // -------------------------
 // 📁 DOCUMENT TAGS
@@ -361,7 +359,6 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   res.status(201).json(data);
 });
 
-
 app.get('/documents/:id', async (req, res) => {
   const documentId = req.params.id;
   const { data, error } = await supabase
@@ -400,6 +397,63 @@ app.post('/document-history', verifyStructure(['document_id', 'edited_by', 'role
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
 });
+
+app.get('/get-assignee', authenticateToken, async (req, res) => {
+  const { companyId, role } = req.user;
+  let targetRole;
+
+  if (role === 'Owner' || role === 'Manager' || role === 'Scanner') {
+    targetRole = 'Indexer';
+  } else if (role === 'Indexer') {
+    targetRole = 'QA';
+  } else {
+    return res.json([]); // QA gets no one
+  }
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, name, email, role')
+    .eq('company_id', companyId)
+    .eq('role', targetRole);
+
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
+app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'assignee_id']), async (req, res) => {
+  const { document_id, assignee_id } = req.body;
+  const { companyId, role } = req.user;
+
+  const { data: doc, error: docError } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('id', document_id)
+    .eq('company_id', companyId)
+    .single();
+
+  if (docError || !doc) return res.status(404).json({ error: 'Document not found for this company.' });
+
+  let updateFields = { passed_to: assignee_id };
+
+  if (role === 'Owner' || role === 'Manager' || role === 'Scanner') {
+    updateFields.indexer_passed_id = assignee_id;
+  } else if (role === 'Indexer') {
+    updateFields.qa_passed_id = assignee_id;
+    updateFields.progress_number = 2;
+  } else {
+    return res.status(403).json({ error: 'You are not allowed to assign from your role.' });
+  }
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update(updateFields)
+    .eq('id', document_id)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Assignee updated successfully.', data });
+});
+
 
 //invoices
 
