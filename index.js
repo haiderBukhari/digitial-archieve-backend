@@ -339,12 +339,12 @@ app.get('/documents', authenticateToken, async (req, res) => {
   const enhancedDocs = documents.map(doc => {
     const addedBy = usersMap[doc.added_by] || null;
 
-    let requestedById = null;
-    if (roleLower === 'scanner' || roleLower === 'indexer') {
-      requestedById = doc.added_by;
-    } else if (roleLower === 'qa') {
-      requestedById = doc.indexer_passed_id;
+    let requestedById = doc.added_by;
+
+    if (roleLower === 'qa') {
+      requestedById = doc.indexer_passed_id || doc.added_by;
     }
+
 
     const requestedBy = requestedById && usersMap[requestedById]
       ? {
