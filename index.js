@@ -377,7 +377,7 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
     showMore = !document.passed_to; // true if not passed yet
   } else {
     if (document.indexer_passed_id === currentUserId || document.qa_passed_id === currentUserId) {
-      showMore = true;
+      showMore = document.passed_to === document.indexer_passed_id;
     } else {
       showMore = false;
     }
