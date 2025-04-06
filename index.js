@@ -404,9 +404,9 @@ app.get('/get-assignee', authenticateToken, async (req, res) => {
 
   let targetRole;
 
-  if (role === 'owner' || role === 'manager' || role === 'scanner') {
+  if (role.toLowerCase() === 'owner' || role.toLowerCase() === 'manager' || role.toLowerCase() === 'scanner') {
     targetRole = 'indexer';
-  } else if (role === 'indexer') {
+  } else if (role.toLowerCase() === 'indexer') {
     targetRole = 'qa';
   } else {
     return res.json([]); // QA gets no one
@@ -441,9 +441,9 @@ app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'a
 
   let updateFields = { passed_to: assignee_id };
 
-  if (role === 'owner' || role === 'manager' || role === 'scanner') {
+  if (role.toLowerCase() === 'owner' || role.toLowerCase() === 'manager' || role.toLowerCase() === 'scanner') {
     updateFields.indexer_passed_id = assignee_id;
-  } else if (role === 'indexer') {
+  } else if (role.toLowerCase() === 'indexer') {
     updateFields.qa_passed_id = assignee_id;
     updateFields.progress_number = 2;
   } else {
