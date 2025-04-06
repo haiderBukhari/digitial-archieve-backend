@@ -359,16 +359,31 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   res.status(201).json(data);
 });
 
-app.get('/documents/:id', async (req, res) => {
+app.get('/documents/:id', authenticateToken, async (req, res) => {
   const documentId = req.params.id;
-  const { data, error } = await supabase
+  const currentUserId = req.user.userId;
+
+  const { data: document, error } = await supabase
     .from('documents')
     .select('*')
     .eq('id', documentId)
     .single();
 
-  if (error || !data) return res.status(404).json({ error: 'Document not found' });
-  res.json(data);
+  if (error || !document) return res.status(404).json({ error: 'Document not found' });
+
+  let showMore = false;
+
+  if (document.added_by === currentUserId) {
+    showMore = !document.passed_to; // true if not passed yet
+  } else {
+    if (document.indexer_passed_id === currentUserId || document.qa_passed_id === currentUserId) {
+      showMore = true;
+    } else {
+      showMore = false;
+    }
+  }
+
+  res.json({ ...document, showMore });
 });
 
 app.put('/documents/:id', async (req, res) => {
