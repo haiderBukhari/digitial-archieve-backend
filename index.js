@@ -571,42 +571,78 @@ app.post('/publish', authenticateToken, verifyStructure(['document_id']), async 
 });
 
 // Get all client plans
-app.get('/client-plans', async (req, res) => {
-  const { data, error } = await supabase.from('client_plans').select('*');
+app.get('/client-plans', authenticateToken, async (req, res) => {
+  const companyId = req.user.companyId;
+
+  const { data, error } = await supabase
+    .from('client_plans')
+    .select('*')
+    .eq('company_id', companyId);
+
   if (error) return res.status(400).json(error);
   res.json(data);
 });
 
+
 // Get a specific plan
-app.get('/client-plans/:id', async (req, res) => {
-  const { data, error } = await supabase.from('client_plans').select('*').eq('id', req.params.id).single();
+app.get('/client-plans/:id', authenticateToken, async (req, res) => {
+  const companyId = req.user.companyId;
+
+  const { data, error } = await supabase
+    .from('client_plans')
+    .select('*')
+    .eq('id', req.params.id)
+    .eq('company_id', companyId)
+    .single();
+
   if (error) return res.status(400).json(error);
   res.json(data);
 });
 
 // Create a plan
-app.post('/client-plans', verifyStructure(['name', 'monthly_bill', 'subscription_begin']), async (req, res) => {
-  const { data, error } = await supabase.from('client_plans').insert([req.body]).select();
+app.post('/client-plans', authenticateToken, verifyStructure(['name', 'monthly_bill', 'subscription_begin']), async (req, res) => {
+  const companyId = req.user.companyId;
+  const payload = {
+    ...req.body,
+    company_id: companyId
+  };
+
+  const { data, error } = await supabase.from('client_plans').insert([payload]).select();
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
 });
 
 // Update a plan
-app.put('/client-plans/:id', async (req, res) => {
-  const { data, error } = await supabase.from('client_plans').update(req.body).eq('id', req.params.id).select();
+app.put('/client-plans/:id', authenticateToken, async (req, res) => {
+  const companyId = req.user.companyId;
+
+  const { data, error } = await supabase
+    .from('client_plans')
+    .update(req.body)
+    .eq('id', req.params.id)
+    .eq('company_id', companyId)
+    .select();
+
   if (error) return res.status(400).json(error);
   res.json(data);
 });
 
 // Delete a plan
-app.delete('/client-plans/:id', async (req, res) => {
-  const { error } = await supabase.from('client_plans').delete().eq('id', req.params.id);
+app.delete('/client-plans/:id', authenticateToken, async (req, res) => {
+  const companyId = req.user.companyId;
+
+  const { error } = await supabase
+    .from('client_plans')
+    .delete()
+    .eq('id', req.params.id)
+    .eq('company_id', companyId);
+
   if (error) return res.status(400).json(error);
   res.sendStatus(204);
 });
 
 // Get all clients for the current user's company
-app.get('/clients', async (req, res) => {
+app.get('/clients', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
   const { data, error } = await supabase
     .from('clients')
@@ -618,7 +654,7 @@ app.get('/clients', async (req, res) => {
 });
 
 // Get one client by ID, scoped to company
-app.get('/clients/:id', async (req, res) => {
+app.get('/clients/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const companyId = req.user.companyId;
 
@@ -634,7 +670,7 @@ app.get('/clients/:id', async (req, res) => {
 });
 
 // Create a new client
-app.post('/clients', verifyStructure(['name', 'status', 'plan_name', 'plan_id']), async (req, res) => {
+app.post('/clients', authenticateToken, verifyStructure(['name', 'status', 'plan_name', 'plan_id']), async (req, res) => {
   const companyId = req.user.companyId;
   const payload = {
     ...req.body,
@@ -647,7 +683,7 @@ app.post('/clients', verifyStructure(['name', 'status', 'plan_name', 'plan_id'])
 });
 
 // Update client (only within the user's company)
-app.put('/clients/:id', async (req, res) => {
+app.put('/clients/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const companyId = req.user.companyId;
 
