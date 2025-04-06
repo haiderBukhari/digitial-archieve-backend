@@ -15,7 +15,7 @@ const supabase = createClient(
 
 const app = express();
 app.use(express.json());
-app.use(cors({origin: '*'}))
+app.use(cors({ origin: '*' }))
 const PORT = process.env.PORT || 3000;
 
 // 🌐 Health check
@@ -70,7 +70,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     { expiresIn: '1d' }
   );
 
-  res.json({ token:token, role: user.role, userId: user.id, companyId: user.company_id, name: user.name });
+  res.json({ token: token, role: user.role, userId: user.id, companyId: user.company_id, name: user.name });
 });
 
 app.post('/verify-token', async (req, res) => {
@@ -328,7 +328,7 @@ app.get('/documents', authenticateToken, async (req, res) => {
   if (error) return res.status(400).json(error);
 
   const { data: users, error: userError } = await supabase.from('users').select('id, name, role');
-  
+
   if (userError) return res.status(400).json(userError);
 
   const usersMap = {};
@@ -337,24 +337,26 @@ app.get('/documents', authenticateToken, async (req, res) => {
   });
 
   const enhancedDocs = documents.map(doc => {
-    let requestedById = null;
+    const addedBy = usersMap[doc.added_by] || null;
 
-    if (roleLower === 'scanner') {
-      requestedById = doc.added_by;
-    } else if (roleLower === 'indexer') {
+    let requestedById = null;
+    if (roleLower === 'scanner' || roleLower === 'indexer') {
       requestedById = doc.added_by;
     } else if (roleLower === 'qa') {
       requestedById = doc.indexer_passed_id;
     }
 
-    let requestedBy = requestedById && usersMap[requestedById] ? {
-      name: usersMap[requestedById].name,
-      role: usersMap[requestedById].role
-    } : null;
+    const requestedBy = requestedById && usersMap[requestedById]
+      ? {
+        name: usersMap[requestedById].name,
+        role: usersMap[requestedById].role,
+      }
+      : null;
 
     return {
       ...doc,
-      requested_by: requestedBy
+      added_by_user: addedBy,
+      requested_by: requestedBy,
     };
   });
 
@@ -592,7 +594,7 @@ app.post('/send-invoice/:companyId', async (req, res) => {
       refreshToken: process.env.OAUTH_REFRESH_TOKEN,
     },
   });
-  
+
   const subject = `Invoice Summary - ${company.name}`;
 
   const emailBody = `
