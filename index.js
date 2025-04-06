@@ -213,6 +213,10 @@ app.post('/document-tags', authenticateToken, verifyStructure(['title', 'propert
 app.get('/document-tags', authenticateToken, async (req, res) => {
   const company_id = req.user.companyId;
 
+  if (!company_id) {
+    return res.status(400).json({ error: 'Missing company ID in token.' });
+  }
+
   const { data: tags, error: tagError } = await supabase
     .from('document_tags')
     .select('*')
@@ -221,6 +225,8 @@ app.get('/document-tags', authenticateToken, async (req, res) => {
   if (tagError) return res.status(400).json(tagError);
 
   const enrichedTags = await Promise.all(tags.map(async (tag) => {
+    if (!tag.id) return { ...tag, complete_documents: 0, incomplete_documents: 0 };
+
     const { count: complete_documents } = await supabase
       .from('documents')
       .select('*', { count: 'exact', head: true })
@@ -242,6 +248,7 @@ app.get('/document-tags', authenticateToken, async (req, res) => {
 
   res.json(enrichedTags);
 });
+
 
 app.put('/document-tags/:id', async (req, res) => {
   const { data, error } = await supabase.from('document_tags').update(req.body).eq('id', req.params.id).select();
