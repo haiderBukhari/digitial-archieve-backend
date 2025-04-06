@@ -345,7 +345,6 @@ app.get('/documents', authenticateToken, async (req, res) => {
       requestedById = doc.indexer_passed_id || doc.added_by;
     }
 
-
     const requestedBy = requestedById && usersMap[requestedById]
       ? {
         name: usersMap[requestedById].name,
@@ -408,6 +407,7 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
 app.get('/documents/:id', authenticateToken, async (req, res) => {
   const documentId = req.params.id;
   const currentUserId = req.user.userId;
+  const role = req.user.role.toLowerCase();
 
   const { data: document, error } = await supabase
     .from('documents')
@@ -419,7 +419,7 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
 
   let showMore = false;
 
-  if (document.added_by === currentUserId) {
+  if (document.added_by === currentUserId || role == 'manager' || role == 'owner') {
     showMore = !document.passed_to; // true if not passed yet
   } else {
     if (document.indexer_passed_id === currentUserId || document.qa_passed_id === currentUserId) {
