@@ -305,16 +305,60 @@ app.delete('/users/:id', async (req, res) => {
 // -------------------------
 // 📁 DOCUMENTS
 // -------------------------
+
 app.get('/documents', authenticateToken, async (req, res) => {
-  const company_id = req.user.companyId;
+  const { companyId, userId, role } = req.user;
+  const roleLower = role.toLowerCase();
 
-  const { data, error } = await supabase
-    .from('documents')
-    .select('*')
-    .eq('company_id', company_id);
+  let query = supabase.from('documents').select('*');
 
+  if (roleLower === 'owner' || roleLower === 'manager') {
+    query = query.eq('company_id', companyId);
+  } else if (roleLower === 'scanner') {
+    query = query.eq('company_id', companyId).eq('added_by', userId);
+  } else if (roleLower === 'indexer') {
+    query = query.eq('company_id', companyId).eq('indexer_passed_id', userId);
+  } else if (roleLower === 'qa') {
+    query = query.eq('company_id', companyId).eq('qa_passed_id', userId);
+  } else {
+    return res.status(403).json({ error: 'Unauthorized role access.' });
+  }
+
+  const { data: documents, error } = await query;
   if (error) return res.status(400).json(error);
-  res.json(data);
+
+  const { data: users, error: userError } = await supabase.from('users').select('id, name, role');
+  
+  if (userError) return res.status(400).json(userError);
+
+  const usersMap = {};
+  users.forEach(u => {
+    usersMap[u.id] = { name: u.name, role: u.role };
+  });
+
+  const enhancedDocs = documents.map(doc => {
+    let requestedById = null;
+
+    if (roleLower === 'scanner') {
+      requestedById = doc.added_by;
+    } else if (roleLower === 'indexer') {
+      requestedById = doc.added_by;
+    } else if (roleLower === 'qa') {
+      requestedById = doc.indexer_passed_id;
+    }
+
+    let requestedBy = requestedById && usersMap[requestedById] ? {
+      name: usersMap[requestedById].name,
+      role: usersMap[requestedById].role
+    } : null;
+
+    return {
+      ...doc,
+      requested_by: requestedBy
+    };
+  });
+
+  res.json(enhancedDocs);
 });
 
 app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag_name', 'file_id']), async (req, res) => {
@@ -420,9 +464,9 @@ app.get('/get-assignee', authenticateToken, async (req, res) => {
 
   let targetRole;
 
-  if (role.toLowerCase() === 'owner' || role.toLowerCase() === 'manager' || role.toLowerCase() === 'scanner') {
+  if (role === 'owner' || role === 'manager' || role === 'scanner') {
     targetRole = 'indexer';
-  } else if (role.toLowerCase() === 'indexer') {
+  } else if (role === 'indexer') {
     targetRole = 'qa';
   } else {
     return res.json([]); // QA gets no one
