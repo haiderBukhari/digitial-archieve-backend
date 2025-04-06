@@ -399,13 +399,15 @@ app.post('/document-history', verifyStructure(['document_id', 'edited_by', 'role
 });
 
 app.get('/get-assignee', authenticateToken, async (req, res) => {
-  const { companyId, role } = req.user;
+  const { companyId } = req.user;
+  const role = req.user.role.toLowerCase();
+
   let targetRole;
 
-  if (role === 'Owner' || role === 'Manager' || role === 'Scanner') {
-    targetRole = 'Indexer';
-  } else if (role === 'Indexer') {
-    targetRole = 'QA';
+  if (role === 'owner' || role === 'manager' || role === 'scanner') {
+    targetRole = 'indexer';
+  } else if (role === 'indexer') {
+    targetRole = 'qa';
   } else {
     return res.json([]); // QA gets no one
   }
@@ -414,15 +416,19 @@ app.get('/get-assignee', authenticateToken, async (req, res) => {
     .from('users')
     .select('id, name, email, role')
     .eq('company_id', companyId)
-    .eq('role', targetRole);
+    .ilike('role', targetRole);
 
   if (error) return res.status(400).json(error);
   res.json(data);
 });
 
+// -------------------------
+// 🔁 POST ASSIGNEE ENDPOINT
+// -------------------------
 app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'assignee_id']), async (req, res) => {
   const { document_id, assignee_id } = req.body;
-  const { companyId, role } = req.user;
+  const { companyId } = req.user;
+  const role = req.user.role.toLowerCase();
 
   const { data: doc, error: docError } = await supabase
     .from('documents')
@@ -435,9 +441,9 @@ app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'a
 
   let updateFields = { passed_to: assignee_id };
 
-  if (role === 'Owner' || role === 'Manager' || role === 'Scanner') {
+  if (role === 'owner' || role === 'manager' || role === 'scanner') {
     updateFields.indexer_passed_id = assignee_id;
-  } else if (role === 'Indexer') {
+  } else if (role === 'indexer') {
     updateFields.qa_passed_id = assignee_id;
     updateFields.progress_number = 2;
   } else {
