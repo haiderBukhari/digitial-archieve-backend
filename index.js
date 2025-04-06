@@ -392,6 +392,7 @@ app.put('/documents/:id', async (req, res) => {
   res.json(data);
 });
 
+
 app.delete('/documents/:id', async (req, res) => {
   const { error } = await supabase.from('documents').delete().eq('id', req.params.id);
   if (error) return res.status(400).json(error);
@@ -473,6 +474,48 @@ app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'a
 
   if (error) return res.status(400).json(error);
   res.status(200).json({ message: 'Assignee updated successfully.', data });
+});
+
+
+app.post('/save-draft', authenticateToken, verifyStructure(['document_id']), async (req, res) => {
+  const { document_id } = req.body;
+  const { companyId, role } = req.user;
+
+  if (role.toLowerCase() !== 'qa') {
+    return res.status(403).json({ error: 'Only QA role can save drafts.' });
+  }
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update({ progress_number: 3 })
+    .eq('id', document_id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Document draft saved successfully.', data });
+});
+
+// -------------------------
+// 🚀 PUBLISH DOCUMENT (QA only)
+// -------------------------
+app.post('/publish', authenticateToken, verifyStructure(['document_id']), async (req, res) => {
+  const { document_id } = req.body;
+  const { companyId, role } = req.user;
+
+  if (role.toLowerCase() !== 'qa') {
+    return res.status(403).json({ error: 'Only QA role can publish documents.' });
+  }
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update({ progress_number: 3, is_published: true })
+    .eq('id', document_id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Document published successfully.', data });
 });
 
 
