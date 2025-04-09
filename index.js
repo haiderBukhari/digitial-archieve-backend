@@ -897,14 +897,13 @@ app.post('/share-document', authenticateToken, verifyStructure(['document_link',
   res.status(201).json({ message: 'Document shared successfully.', shared });
 });
 
-// 🔐 Retrieve Shared Document API
-app.post('/get-shared-document', verifyStructure(['document_link', 'document_password']), async (req, res) => {
-  const { document_link, document_password } = req.body;
+app.post('/get-shared-document', verifyStructure(['id', 'document_password']), async (req, res) => {
+  const { id, document_password } = req.body;
 
   const { data: shared, error } = await supabase
     .from('shareddoc')
     .select('*')
-    .eq('document_link', document_link)
+    .eq('id', id)
     .eq('document_password', document_password)
     .single();
 
