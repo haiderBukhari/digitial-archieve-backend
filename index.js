@@ -670,7 +670,7 @@ app.get('/clients/:id', authenticateToken, async (req, res) => {
 });
 
 // Create a new client
-app.post('/clients', authenticateToken, verifyStructure(['name', 'status', 'plan_name', 'plan_id']), async (req, res) => {
+app.post('/clients', authenticateToken, verifyStructure(['name', 'status', 'plan_id']), async (req, res) => {
   const companyId = req.user.companyId;
   const payload = {
     ...req.body,
