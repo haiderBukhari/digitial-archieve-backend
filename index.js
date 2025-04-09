@@ -942,4 +942,71 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
   res.status(200).json({ document_link: data.document_link });
 });
 
+app.get('/get-profile', authenticateToken, async (req, res) => {
+  const { userId } = req.user;
+
+  // Try users table
+  const { data: user, error: userError } = await supabase
+    .from('users')
+    .select('name, email, password, phone, documents_reviewed, profile_picture')
+    .eq('id', userId)
+    .single();
+
+  if (user && !userError) {
+    return res.json({ role: 'User', profile: user });
+  }
+
+  // If not found, try clients table
+  const { data: client, error: clientError } = await supabase
+    .from('clients')
+    .select('email, password, phone, profile_picture')
+    .eq('id', userId)
+    .single();
+
+  if (client && !clientError) {
+    return res.json({ role: 'Client', profile: client });
+  }
+
+  return res.status(404).json({ error: 'Profile not found.' });
+});
+
+// 📤 Update current user's profile
+app.put('/get-profile', authenticateToken, async (req, res) => {
+  const { userId } = req.user;
+  const { name, password, phone, profile_picture } = req.body;
+
+  // Only these fields are allowed to be updated
+  const updateFields = {};
+  if (name !== undefined) updateFields.name = name;
+  if (password !== undefined) updateFields.password = password;
+  if (phone !== undefined) updateFields.phone = phone;
+  if (profile_picture !== undefined) updateFields.profile_picture = profile_picture;
+
+  // Update users table first
+  const { data: updatedUser, error: userUpdateError } = await supabase
+    .from('users')
+    .update(updateFields)
+    .eq('id', userId)
+    .select()
+    .single();
+
+  if (updatedUser && !userUpdateError) {
+    return res.status(200).json({ message: 'User profile updated.', profile: updatedUser });
+  }
+
+  // If not in users table, try clients
+  const { data: updatedClient, error: clientUpdateError } = await supabase
+    .from('clients')
+    .update(updateFields)
+    .eq('id', userId)
+    .select()
+    .single();
+
+  if (updatedClient && !clientUpdateError) {
+    return res.status(200).json({ message: 'Client profile updated.', profile: updatedClient });
+  }
+
+  return res.status(400).json({ error: 'Failed to update profile.' });
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
