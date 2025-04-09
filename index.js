@@ -495,7 +495,7 @@ app.get('/get-assignee', authenticateToken, async (req, res) => {
 
   let targetRole;
 
-  if (role === 'owner' || role === 'manager' || role === 'scanner') {
+  if (role === 'owner' || role === 'manager' || role === 'scanner' || role === 'client') {
     targetRole = 'indexer';
   } else if (role === 'indexer') {
     targetRole = 'qa';
@@ -532,7 +532,7 @@ app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'a
 
   let updateFields = { passed_to: assignee_id };
 
-  if (role.toLowerCase() === 'owner' || role.toLowerCase() === 'manager' || role.toLowerCase() === 'scanner') {
+  if (role.toLowerCase() === 'owner' || role.toLowerCase() === 'manager' || role.toLowerCase() === 'scanner' || role.toLowerCase() === 'client') {
     updateFields.indexer_passed_id = assignee_id;
   } else if (role.toLowerCase() === 'indexer') {
     updateFields.qa_passed_id = assignee_id;
