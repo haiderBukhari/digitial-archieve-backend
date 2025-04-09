@@ -873,20 +873,19 @@ app.post('/share-document', authenticateToken, verifyStructure(['document_link',
   const { document_link, document_password, document_id } = req.body;
   const { userId, companyId } = req.user;
 
-  // Insert into shareddoc
   const { data: shared, error: shareError } = await supabase
     .from('shareddoc')
     .insert([{
       document_link,
       document_password,
       user_id: userId,
+      document_id: document_id,
       company_id: companyId
     }])
     .select();
 
   if (shareError) return res.status(400).json(shareError);
 
-  // Update documents table to mark shared = true
   const { error: updateError } = await supabase
     .from('documents')
     .update({ shared: true })
@@ -912,6 +911,29 @@ app.post('/get-shared-document', verifyStructure(['document_link', 'document_pas
   if (error || !shared) return res.status(404).json({ error: 'Invalid link or password' });
 
   res.status(200).json({ message: 'Document access granted.', shared });
+});
+
+// 📥 Get Shared Document URL (Client only)
+app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
+  const { userId, role } = req.user;
+  const { document_id } = req.params;
+
+  if (role !== 'Client') {
+    return res.status(403).json({ error: 'Only clients are allowed to access this route.' });
+  }
+
+  const { data, error } = await supabase
+    .from('shareddoc')
+    .select('document_link')
+    .eq('document_id', document_id)
+    .eq('user_id', userId)
+    .single();
+
+  if (error || !data) {
+    return res.status(404).json({ error: 'Shared document not found for this client.' });
+  }
+
+  res.status(200).json({ document_link: data.document_link });
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
