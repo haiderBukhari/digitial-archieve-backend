@@ -399,7 +399,7 @@ app.get('/documents', authenticateToken, async (req, res) => {
 });
 
 app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag_name', 'file_id']), async (req, res) => {
-  const { url, tag_id, tag_name, file_id } = req.body;
+  const { url, tag_id, tag_name, file_id, documentTitle } = req.body;
   const company_id = req.user.companyId;
   const added_by = req.user.userId;
   const role = req.user.role;
@@ -420,7 +420,7 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   const document = {
     url,
     company_id,
-    title: tag_name,
+    title: documentTitle,
     progress: 'Incomplete',
     tag_id,
     progress_number: (role === 'Owner' || role === 'Manager' || role == 'Client') ? 1 : role === 'Scanner' ? 1 : 1,
