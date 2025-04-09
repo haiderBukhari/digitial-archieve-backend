@@ -869,6 +869,49 @@ const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
   }
 };
 
+app.post('/share-document', authenticateToken, verifyStructure(['document_link', 'document_password', 'document_id']), async (req, res) => {
+  const { document_link, document_password, document_id } = req.body;
+  const { userId, companyId } = req.user;
 
+  // Insert into shareddoc
+  const { data: shared, error: shareError } = await supabase
+    .from('shareddoc')
+    .insert([{
+      document_link,
+      document_password,
+      user_id: userId,
+      company_id: companyId
+    }])
+    .select();
+
+  if (shareError) return res.status(400).json(shareError);
+
+  // Update documents table to mark shared = true
+  const { error: updateError } = await supabase
+    .from('documents')
+    .update({ shared: true })
+    .eq('id', document_id)
+    .eq('company_id', companyId);
+
+  if (updateError) return res.status(400).json(updateError);
+
+  res.status(201).json({ message: 'Document shared successfully.', shared });
+});
+
+// 🔐 Retrieve Shared Document API
+app.post('/get-shared-document', verifyStructure(['document_link', 'document_password']), async (req, res) => {
+  const { document_link, document_password } = req.body;
+
+  const { data: shared, error } = await supabase
+    .from('shareddoc')
+    .select('*')
+    .eq('document_link', document_link)
+    .eq('document_password', document_password)
+    .single();
+
+  if (error || !shared) return res.status(404).json({ error: 'Invalid link or password' });
+
+  res.status(200).json({ message: 'Document access granted.', shared });
+});
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
