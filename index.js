@@ -347,6 +347,8 @@ app.get('/documents', authenticateToken, async (req, res) => {
     query = query.eq('company_id', companyId).eq('indexer_passed_id', userId);
   } else if (roleLower === 'qa') {
     query = query.eq('company_id', companyId).eq('qa_passed_id', userId);
+  } else if (roleLower === 'client') {
+    query = query.eq('company_id', companyId).eq('added_by', userId);
   } else {
     return res.status(403).json({ error: 'Unauthorized role access.' });
   }
