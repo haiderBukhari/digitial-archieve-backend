@@ -332,13 +332,13 @@ app.delete('/users/:id', async (req, res) => {
 // -------------------------
 // 📁 DOCUMENTS
 // -------------------------
-
 app.get('/documents', authenticateToken, async (req, res) => {
   const { companyId, userId, role } = req.user;
   const roleLower = role.toLowerCase();
 
   let query = supabase.from('documents').select('*');
 
+  // 🔐 Role-based filtering
   if (roleLower === 'owner' || roleLower === 'manager') {
     query = query.eq('company_id', companyId);
   } else if (roleLower === 'scanner') {
@@ -353,38 +353,45 @@ app.get('/documents', authenticateToken, async (req, res) => {
     return res.status(403).json({ error: 'Unauthorized role access.' });
   }
 
+  // 📄 Fetch documents
   const { data: documents, error } = await query;
   if (error) return res.status(400).json(error);
 
+  // 👤 Fetch users and clients for enrichment
   const { data: users, error: userError } = await supabase.from('users').select('id, name, role');
+  const { data: clients, error: clientError } = await supabase.from('clients').select('id, name');
 
-  if (userError) return res.status(400).json(userError);
+  if (userError || clientError) return res.status(400).json(userError || clientError);
 
+  // 🔄 Map user/client IDs for easy lookup
   const usersMap = {};
   users.forEach(u => {
     usersMap[u.id] = { name: u.name, role: u.role };
   });
+  clients.forEach(c => {
+    usersMap[c.id] = { name: c.name, role: 'Client' };
+  });
 
+  // 🧠 Enhance documents with added_by and requested_by info
   const enhancedDocs = documents.map(doc => {
     const addedBy = usersMap[doc.added_by] || null;
 
     let requestedById = doc.added_by;
-
     if (roleLower === 'qa') {
       requestedById = doc.indexer_passed_id || doc.added_by;
     }
 
     const requestedBy = requestedById && usersMap[requestedById]
       ? {
-        name: usersMap[requestedById].name,
-        role: usersMap[requestedById].role,
-      }
+          name: usersMap[requestedById].name,
+          role: usersMap[requestedById].role
+        }
       : null;
 
     return {
       ...doc,
       added_by_user: addedBy,
-      requested_by: requestedBy,
+      requested_by: requestedBy
     };
   });
 
