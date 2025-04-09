@@ -49,13 +49,28 @@ const authenticateToken = (req, res, next) => {
 app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
   const { email, password } = req.body;
 
-  const { data: user, error } = await supabase
+  let { data: user, error } = await supabase
     .from('users')
     .select('id, email, password, company_id, role, name')
     .eq('email', email)
     .single();
 
-  if (error || !user || user.password !== password) {
+  if (!user || error) {
+    const clientResult = await supabase
+      .from('clients')
+      .select('id, email, password, company_id, name')
+      .eq('email', email)
+      .single();
+
+    if (clientResult.data && clientResult.data.password === password) {
+      user = {
+        ...clientResult.data,
+        role: 'Client'
+      };
+    } else {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+  } else if (user.password !== password) {
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
@@ -70,7 +85,13 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     { expiresIn: '1d' }
   );
 
-  res.json({ token: token, role: user.role, userId: user.id, companyId: user.company_id, name: user.name });
+  res.json({
+    token,
+    role: user.role,
+    userId: user.id,
+    companyId: user.company_id,
+    name: user.name
+  });
 });
 
 app.post('/verify-token', async (req, res) => {
