@@ -978,7 +978,7 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
 
   const { data, error } = await supabase
     .from('shareddoc')
-    .select('document_link')
+    .select('document_id')
     .eq('document_id', document_id)
     .eq('user_id', userId)
     .single();
@@ -987,7 +987,7 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
     return res.status(404).json({ error: 'Shared document not found for this client.' });
   }
 
-  res.status(200).json({ document_link: data.document_link });
+  res.status(200).json({ document_link: `https://archiveinnovators.vercel.app/view-pdf/${data.document_id}`,  });
 });
 
 app.get('/get-profile', authenticateToken, async (req, res) => {
