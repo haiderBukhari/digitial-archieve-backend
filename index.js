@@ -972,10 +972,6 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
   const { userId, role } = req.user;
   const { document_id } = req.params;
 
-  if (role !== 'Client') {
-    return res.status(403).json({ error: 'Only clients are allowed to access this route.' });
-  }
-
   const { data, error } = await supabase
     .from('shareddoc')
     .select('document_id')
