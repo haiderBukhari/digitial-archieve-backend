@@ -1057,4 +1057,36 @@ app.put('/get-profile', authenticateToken, async (req, res) => {
   return res.status(400).json({ error: 'Failed to update profile.' });
 });
 
+app.get('/document-progress', authenticateToken, async (req, res) => {
+  const { userId } = req.user;
+
+  const now = new Date();
+  const startOfWeek = new Date(now);
+  startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday as start of week
+
+  // Fetch edit history for current user starting this week
+  const { data: history, error } = await supabase
+    .from('document_edit_history')
+    .select('created_at')
+    .eq('edited_by', userId)
+    .gte('created_at', startOfWeek.toISOString());
+
+  if (error) return res.status(400).json(error);
+
+  // Create initial structure for the week's days
+  const progress = {
+    Sunday: 0, Monday: 0, Tuesday: 0, Wednesday: 0,
+    Thursday: 0, Friday: 0, Saturday: 0
+  };
+
+  // Aggregate edit counts per day
+  history.forEach(entry => {
+    const date = new Date(entry.created_at);
+    const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+    progress[dayName]++;
+  });
+
+  res.json({ userId, progress });
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
