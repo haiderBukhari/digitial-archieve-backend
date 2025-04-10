@@ -958,7 +958,7 @@ app.post('/get-shared-document', verifyStructure(['document_id', 'document_passw
   const { data: shared, error } = await supabase
     .from('shareddoc')
     .select('*')
-    .eq('id', document_id)
+    .eq('document_id', document_id)
     .eq('document_password', document_password)
     .single();
 
