@@ -484,14 +484,32 @@ app.delete('/documents/:id', async (req, res) => {
 // -------------------------
 // 📁 DOCUMENT EDIT HISTORY
 // -------------------------
-app.get('/document-history', async (req, res) => {
-  const { data, error } = await supabase.from('document_edit_history').select('*');
+
+app.get('/document-history/:document_id', async (req, res) => {
+  const { document_id } = req.params;
+
+  const { data, error } = await supabase
+    .from('document_edit_history')
+    .select('*')
+    .eq('document_id', document_id)
+    .order('created_at', { ascending: false }); // Optional: newest first
+
   if (error) return res.status(400).json(error);
   res.json(data);
 });
 
-app.post('/document-history', verifyStructure(['document_id', 'edited_by', 'role', 'edit_description']), async (req, res) => {
-  const { data, error } = await supabase.from('document_edit_history').insert([req.body]).select();
+app.post('/document-history', authenticateToken, verifyStructure(['document_id', 'edit_description']), async (req, res) => {
+  const { document_id, edit_description } = req.body;
+  const edited_by = req.user.userId;
+  const role = req.user.role;
+
+  const { data, error } = await supabase
+    .from('document_edit_history')
+    .insert([
+      { document_id, edited_by, role, edit_description }
+    ])
+    .select();
+
   if (error) return res.status(400).json(error);
   res.status(201).json(data);
 });
