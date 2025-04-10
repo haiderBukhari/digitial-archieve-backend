@@ -336,7 +336,10 @@ app.get('/documents', authenticateToken, async (req, res) => {
   const { companyId, userId, role } = req.user;
   const roleLower = role.toLowerCase();
 
-  let query = supabase.from('documents').select('*');
+  let query = supabase
+    .from('documents')
+    .select('*')
+    .order('created_at', { ascending: false }); // 🆕 Sort by newest first
 
   // 🔐 Role-based filtering
   if (roleLower === 'owner' || roleLower === 'manager') {
@@ -357,13 +360,12 @@ app.get('/documents', authenticateToken, async (req, res) => {
   const { data: documents, error } = await query;
   if (error) return res.status(400).json(error);
 
-  // 👤 Fetch users and clients for enrichment
+  // 👤 Fetch users and clients
   const { data: users, error: userError } = await supabase.from('users').select('id, name, role');
   const { data: clients, error: clientError } = await supabase.from('clients').select('id, name');
 
   if (userError || clientError) return res.status(400).json(userError || clientError);
 
-  // 🔄 Map user/client IDs for easy lookup
   const usersMap = {};
   users.forEach(u => {
     usersMap[u.id] = { name: u.name, role: u.role };
@@ -372,7 +374,6 @@ app.get('/documents', authenticateToken, async (req, res) => {
     usersMap[c.id] = { name: c.name, role: 'Client' };
   });
 
-  // 🧠 Enhance documents with added_by and requested_by info
   const enhancedDocs = documents.map(doc => {
     const addedBy = usersMap[doc.added_by] || null;
 
