@@ -976,7 +976,6 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
     .from('shareddoc')
     .select('document_id')
     .eq('document_id', document_id)
-    .eq('user_id', userId)
     .single();
 
   if (error || !data) {
