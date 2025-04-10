@@ -952,13 +952,13 @@ app.post('/share-document', authenticateToken, verifyStructure(['document_link',
   res.status(201).json({ message: 'Document shared successfully.', shared });
 });
 
-app.post('/get-shared-document', verifyStructure(['id', 'document_password']), async (req, res) => {
-  const { id, document_password } = req.body;
+app.post('/get-shared-document', verifyStructure(['document_id', 'document_password']), async (req, res) => {
+  const { document_id, document_password } = req.body;
 
   const { data: shared, error } = await supabase
     .from('shareddoc')
     .select('*')
-    .eq('id', id)
+    .eq('id', document_id)
     .eq('document_password', document_password)
     .single();
 
@@ -987,7 +987,7 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
     return res.status(404).json({ error: 'Shared document not found for this client.' });
   }
 
-  res.status(200).json({ document_link: `https://archiveinnovators.vercel.app/view-pdf/${data.document_id}`,  });
+  res.status(200).json({ document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.document_id}`,  });
 });
 
 app.get('/get-profile', authenticateToken, async (req, res) => {
