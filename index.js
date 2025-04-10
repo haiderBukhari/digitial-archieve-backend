@@ -488,14 +488,43 @@ app.delete('/documents/:id', async (req, res) => {
 app.get('/document-history/:document_id', async (req, res) => {
   const { document_id } = req.params;
 
-  const { data, error } = await supabase
+  // Fetch document edit history
+  const { data: history, error: historyError } = await supabase
     .from('document_edit_history')
     .select('*')
     .eq('document_id', document_id)
-    .order('created_at', { ascending: false }); // Optional: newest first
+    .order('created_at', { ascending: false });
 
-  if (error) return res.status(400).json(error);
-  res.json(data);
+  if (historyError) return res.status(400).json(historyError);
+
+  // Get all unique edited_by user IDs from history
+  const editedByIds = [...new Set(history.map(h => h.edited_by).filter(Boolean))];
+
+  // Fetch user names from users table
+  const { data: users } = await supabase
+    .from('users')
+    .select('id, name')
+    .in('id', editedByIds);
+
+  // Fetch client names from clients table
+  const { data: clients } = await supabase
+    .from('clients')
+    .select('id, name')
+    .in('id', editedByIds);
+
+  // Combine users and clients into a single lookup
+  const userMap = {};
+  [...(users || []), ...(clients || [])].forEach(person => {
+    userMap[person.id] = person.name;
+  });
+
+  // Merge name into each history record
+  const enrichedHistory = history.map(entry => ({
+    ...entry,
+    edited_by_name: userMap[entry.edited_by] || 'Unknown'
+  }));
+
+  res.json(enrichedHistory);
 });
 
 app.post('/document-history', authenticateToken, verifyStructure(['document_id', 'edit_description']), async (req, res) => {
