@@ -1062,31 +1062,51 @@ app.get('/document-progress', authenticateToken, async (req, res) => {
 
   const now = new Date();
   const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday as start of week
+  startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday
 
-  // Fetch edit history for current user starting this week
+  // Fetch all edit history by current user since start of week
   const { data: history, error } = await supabase
     .from('document_edit_history')
-    .select('created_at')
+    .select('created_at, edit_description')
     .eq('edited_by', userId)
     .gte('created_at', startOfWeek.toISOString());
 
   if (error) return res.status(400).json(error);
 
-  // Create initial structure for the week's days
+  // 🗓️ Daily progress chart
   const progress = {
     Sunday: 0, Monday: 0, Tuesday: 0, Wednesday: 0,
     Thursday: 0, Friday: 0, Saturday: 0
   };
 
-  // Aggregate edit counts per day
+  // 📊 Category counts
+  let documents_indexed = 0;
+  let documents_viewed = 0;
+  let documents_changed = 0;
+  let documents_published = 0;
+
   history.forEach(entry => {
-    const date = new Date(entry.created_at);
-    const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
-    progress[dayName]++;
+    const day = new Date(entry.created_at).toLocaleDateString('en-US', { weekday: 'long' });
+    progress[day]++;
+
+    const desc = entry.edit_description?.toLowerCase() || "";
+
+    if (desc.includes('submitted document for indexing')) documents_indexed++;
+    else if (desc.includes('opened the document')) documents_viewed++;
+    else if (desc.includes('changed') || desc.includes('edited')) documents_changed++;
+    else if (desc.includes('published')) documents_published++;
   });
 
-  res.json({ userId, progress });
+  res.json({
+    userId,
+    progress,
+    summary: {
+      documents_indexed,
+      documents_viewed,
+      documents_changed,
+      documents_published
+    }
+  });
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
