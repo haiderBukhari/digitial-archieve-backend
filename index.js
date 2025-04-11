@@ -252,13 +252,13 @@ app.get('/document-tags', authenticateToken, async (req, res) => {
       .from('documents')
       .select('*', { count: 'exact', head: true })
       .eq('tag_id', tag.id)
-      .eq('progress', 'Complete');
+      .eq('is_published', true);
 
     const { count: incomplete_documents } = await supabase
       .from('documents')
       .select('*', { count: 'exact', head: true })
       .eq('tag_id', tag.id)
-      .eq('progress', 'Incomplete');
+      .eq('is_published', false);
 
     return {
       ...tag,
