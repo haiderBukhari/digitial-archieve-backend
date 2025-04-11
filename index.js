@@ -221,7 +221,7 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
   // Step 3: Insert company
   const { data: companyData, error: createError } = await supabase
     .from('companies')
-    .insert([{ name, contact_email, password_hash, plan_id, admin_name }])
+    .insert([{ name, contact_email, password_hash, plan_id, admin_name, invoice_value_total: plan.price_description }])
     .select();
 
   if (createError) return res.status(400).json(createError);
@@ -234,7 +234,6 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
     phone: '',
     role: 'Owner',
     password: password_hash,
-    invoice_value_total: plan.price_description, // Injected from plan
     company_id: company.id,
     status: 'active'
   }]);
