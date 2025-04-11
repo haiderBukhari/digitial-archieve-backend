@@ -794,7 +794,7 @@ app.delete('/clients/:id', async (req, res) => {
 
 //invoices
 
-app.post('/generate-invoices', authenticateToken, async (req, res) => {
+app.post('/generate-invoices', async (req, res) => {
   const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' }); // e.g., April 2025
 
   // Fetch all active companies
@@ -840,12 +840,13 @@ app.post('/generate-invoices', authenticateToken, async (req, res) => {
         company_name: company.name,
         email: company.contact_email,
         invoice_month: currentMonth,
-        admin_name: company.admin_name || 'Owner',
+        owner_name: company.admin_name || 'Owner',
         invoice_value: company.invoice_value_total || 0
       }])
       .select();
 
     if (insertError) {
+      console.log(insertError)
       results.push({ company: company.name, status: 'Failed to create invoice' });
       continue;
     }
