@@ -794,27 +794,21 @@ app.delete('/clients/:id', async (req, res) => {
 
 //invoices
 
-app.post('/send-invoice/:companyId', async (req, res) => {
-  const companyId = req.params.companyId;
+app.post('/generate-invoices', authenticateToken, async (req, res) => {
+  const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' }); // e.g., April 2025
 
-  const { data: company, error } = await supabase
+  // Fetch all active companies
+  const { data: companies, error } = await supabase
     .from('companies')
-    .select(`
-      id, name, contact_email, status, storage_assigned,
-      documents_viewed, documents_downloaded, documents_scanned,
-      documents_indexed, documents_qa_passed, invoice_value_total
-    `)
-    .eq('id', companyId)
-    .single();
+    .select('id, name, contact_email, status, invoice_value_total, owner_name')
+    .eq('status', 'active');
 
-  if (error || !company) {
-    return res.status(404).json({ error: 'Company not found.' });
-  }
+  if (error) return res.status(400).json({ error: 'Failed to fetch companies' });
 
   const transporter = nodemailer.createTransport({
-    service: "gmail",
+    service: 'gmail',
     auth: {
-      type: "OAuth2",
+      type: 'OAuth2',
       user: process.env.EMAIL_HOST,
       clientId: process.env.CLIENT_ID,
       clientSecret: process.env.CLIENT_SECRET,
@@ -822,47 +816,95 @@ app.post('/send-invoice/:companyId', async (req, res) => {
     },
   });
 
-  const subject = `Invoice Summary - ${company.name}`;
+  const results = [];
 
-  const emailBody = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-      <div style="background-color: #0056D2; padding: 20px; text-align: center;">
-        <h1 style="color: #fff; margin: 0;">Talo Innovations</h1>
-      </div>
-      <div style="padding: 20px; color: #333;">
-        <h2>Hello ${company.name},</h2>
-        <p>Here is your latest invoice summary based on the system usage:</p>
+  for (const company of companies) {
+    // Check if invoice already exists for this month
+    const { data: existing } = await supabase
+      .from('invoices')
+      .select('id')
+      .eq('company_id', company.id)
+      .eq('invoice_month', currentMonth)
+      .single();
+
+    if (existing) {
+      results.push({ company: company.name, status: 'Already exists' });
+      continue;
+    }
+
+    // Create invoice record
+    const { data: invoice, error: insertError } = await supabase
+      .from('invoices')
+      .insert([{
+        company_id: company.id,
+        company_name: company.name,
+        email: company.contact_email,
+        invoice_month: currentMonth,
+        owner_name: company.owner_name || 'Owner',
+        invoice_value: company.invoice_value_total || 0
+      }])
+      .select();
+
+    if (insertError) {
+      results.push({ company: company.name, status: 'Failed to create invoice' });
+      continue;
+    }
+
+    // Email invoice
+    const subject = `Invoice - ${company.name} - ${currentMonth}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2>Hi ${company.name},</h2>
+        <p>Please find below your invoice summary for <strong>${currentMonth}</strong>:</p>
         <ul>
-          <li><strong>Status:</strong> ${company.status}</li>
-          <li><strong>Storage Assigned:</strong> ${company.storage_assigned} GB</li>
-          <li><strong>Documents Viewed:</strong> ${company.documents_viewed}</li>
-          <li><strong>Documents Downloaded:</strong> ${company.documents_downloaded}</li>
-          <li><strong>Documents Scanned:</strong> ${company.documents_scanned}</li>
-          <li><strong>Documents Indexed:</strong> ${company.documents_indexed}</li>
-          <li><strong>QA Passed Documents:</strong> ${company.documents_qa_passed}</li>
-          <li><strong>Invoice Value:</strong> $${company.invoice_value_total}</li>
+          <li><strong>Owner:</strong> ${company.owner_name || 'Owner'}</li>
+          <li><strong>Invoice Amount:</strong> $${company.invoice_value_total || 0}</li>
         </ul>
-        <p>If you have any questions, feel free to reply to this email.</p>
-        <p>Thank you,<br>Talo Innovations Team</p>
+        <p>Thank you for using Talo Innovations.</p>
       </div>
-    </div>
-  `;
+    `;
 
-  const mailOptions = {
-    from: process.env.EMAIL_HOST,
-    to: company.contact_email,
-    subject,
-    html: emailBody,
-  };
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_HOST,
+        to: company.contact_email,
+        subject,
+        html,
+      });
 
-  try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent successfully:', info.response);
-    return res.status(200).json({ message: 'Invoice email sent successfully.' });
-  } catch (err) {
-    console.error('Error sending email:', err);
-    return res.status(500).json({ error: 'Failed to send email' });
+      results.push({ company: company.name, status: 'Invoice created and emailed' });
+    } catch (err) {
+      results.push({ company: company.name, status: 'Email failed', error: err.message });
+    }
   }
+
+  res.status(200).json(results);
+});
+
+app.get('/invoices', authenticateToken, async (req, res) => {
+  const { role, companyId } = req.user;
+  let query = supabase.from('invoices').select('*');
+
+  if (role.toLowerCase() === 'owner') {
+    query = query.eq('company_id', companyId);
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false });
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
+app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
+  const invoiceId = req.params.id;
+
+  const { data, error } = await supabase
+    .from('invoices')
+    .update({ invoice_submitted: true })
+    .eq('id', invoiceId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.json({ message: 'Invoice marked as submitted', data });
 });
 
 const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
