@@ -194,41 +194,61 @@ app.get('/companies/:id', async (req, res) => {
 });
 
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
-  // Check if company with the same email already exists
+  const { name, contact_email, password_hash, plan_id, admin_name } = req.body;
+
+  // Step 1: Check for existing company
   const { data: existingCompany, error: checkError } = await supabase
     .from('companies')
     .select('id')
-    .eq('contact_email', req.body.contact_email)
+    .eq('contact_email', contact_email)
     .single();
 
   if (existingCompany) {
     return res.status(409).json({ error: 'Company already exists with this email.' });
   }
 
+  // Step 2: Fetch plan details to get price_description
+  const { data: plan, error: planError } = await supabase
+    .from('plans')
+    .select('price_description')
+    .eq('id', plan_id)
+    .single();
+
+  if (planError || !plan) {
+    return res.status(400).json({ error: 'Invalid plan selected.' });
+  }
+
+  // Step 3: Insert company
   const { data: companyData, error: createError } = await supabase
     .from('companies')
-    .insert([req.body])
+    .insert([{ name, contact_email, password_hash, plan_id, admin_name }])
     .select();
 
   if (createError) return res.status(400).json(createError);
   const company = companyData[0];
 
+  // Step 4: Create admin user
   const { error: userError } = await supabase.from('users').insert([{
-    name: req.body.admin_name,
-    email: req.body.contact_email,
+    name: admin_name,
+    email: contact_email,
     phone: '',
     role: 'Owner',
-    password: req.body.password_hash,
+    password: password_hash,
+    invoice_value_total: plan.price_description, // Injected from plan
     company_id: company.id,
     status: 'active'
   }]);
 
-  if (userError) return res.status(500).json({ error: 'Company created but failed to create admin user.' });
+  if (userError) {
+    return res.status(500).json({ error: 'Company created but failed to create admin user.' });
+  }
 
-  await sendWelcomeEmail(req.body.name, req.body.contact_email, req.body.password_hash, `${process.env.FRONTEND_URL}`);
+  // Step 5: Send welcome email
+  await sendWelcomeEmail(name, contact_email, password_hash, `${process.env.FRONTEND_URL}`);
 
   res.status(201).json(companyData);
 });
+
 
 app.put('/companies/:id', async (req, res) => {
   const { data, error } = await supabase.from('companies').update(req.body).eq('id', req.params.id).select();
