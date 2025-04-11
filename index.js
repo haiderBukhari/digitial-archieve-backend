@@ -842,7 +842,7 @@ app.delete('/clients/:id', async (req, res) => {
 //invoices
 
 app.post('/generate-invoices', async (req, res) => {
-  const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' }); // e.g., April 2025
+  const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
 
   // Fetch all active companies
   const { data: companies, error } = await supabase
@@ -866,20 +866,49 @@ app.post('/generate-invoices', async (req, res) => {
   const results = [];
 
   for (const company of companies) {
-    // Check if invoice already exists for this month
-    const { data: existing } = await supabase
+    // Check if invoice exists for this month
+    const { data: existingInvoice } = await supabase
       .from('invoices')
-      .select('id')
+      .select('*')
       .eq('company_id', company.id)
       .eq('invoice_month', currentMonth)
       .single();
 
-    if (existing) {
-      results.push({ company: company.name, status: 'Already exists' });
+    // CASE 1: Invoice exists and has been paid
+    if (existingInvoice && existingInvoice.invoice_submitted === true) {
+      results.push({ company: company.name, status: 'Already paid' });
       continue;
     }
 
-    // Create invoice record
+    // CASE 2: Invoice exists but unpaid — send reminder email
+    if (existingInvoice && existingInvoice.invoice_submitted === false) {
+      try {
+        await transporter.sendMail({
+          from: process.env.EMAIL_HOST,
+          to: company.contact_email,
+          subject: `Reminder: Invoice - ${company.name} - ${currentMonth}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px;">
+              <h2>Hi ${company.name},</h2>
+              <p>This is a reminder that your invoice for <strong>${currentMonth}</strong> is still unpaid.</p>
+              <ul>
+                <li><strong>Owner:</strong> ${company.admin_name || 'Owner'}</li>
+                <li><strong>Invoice Amount:</strong> $${company.invoice_value_total || 0}</li>
+              </ul>
+              <p>Please settle your invoice to continue uninterrupted service.</p>
+              <p>Thank you,<br/>Talo Innovations</p>
+            </div>
+          `,
+        });
+
+        results.push({ company: company.name, status: 'Reminder email sent for unpaid invoice' });
+      } catch (err) {
+        results.push({ company: company.name, status: 'Email failed', error: err.message });
+      }
+      continue;
+    }
+
+    // CASE 3: No invoice exists — create and send email
     const { data: invoice, error: insertError } = await supabase
       .from('invoices')
       .insert([{
@@ -888,36 +917,32 @@ app.post('/generate-invoices', async (req, res) => {
         email: company.contact_email,
         invoice_month: currentMonth,
         owner_name: company.admin_name || 'Owner',
-        invoice_value: company.invoice_value_total || 0
+        invoice_value: company.invoice_value_total || 0,
+        invoice_submitted: false
       }])
       .select();
 
     if (insertError) {
-      console.log(insertError)
       results.push({ company: company.name, status: 'Failed to create invoice' });
       continue;
     }
-
-    // Email invoice
-    const subject = `Invoice - ${company.name} - ${currentMonth}`;
-    const html = `
-      <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2>Hi ${company.name},</h2>
-        <p>Please find below your invoice summary for <strong>${currentMonth}</strong>:</p>
-        <ul>
-          <li><strong>Owner:</strong> ${company.admin_name || 'Owner'}</li>
-          <li><strong>Invoice Amount:</strong> $${company.invoice_value_total || 0}</li>
-        </ul>
-        <p>Thank you for using Talo Innovations.</p>
-      </div>
-    `;
 
     try {
       await transporter.sendMail({
         from: process.env.EMAIL_HOST,
         to: company.contact_email,
-        subject,
-        html,
+        subject: `Invoice - ${company.name} - ${currentMonth}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2>Hi ${company.name},</h2>
+            <p>Please find your invoice summary for <strong>${currentMonth}</strong>:</p>
+            <ul>
+              <li><strong>Owner:</strong> ${company.admin_name || 'Owner'}</li>
+              <li><strong>Invoice Amount:</strong> $${company.invoice_value_total || 0}</li>
+            </ul>
+            <p>Thank you for using Talo Innovations.</p>
+          </div>
+        `,
       });
 
       results.push({ company: company.name, status: 'Invoice created and emailed' });
