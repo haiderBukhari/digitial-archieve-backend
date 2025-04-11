@@ -1104,4 +1104,71 @@ app.get('/document-progress', authenticateToken, async (req, res) => {
   });
 });
 
+// ✅ Create a Dispute
+app.post('/disputes', authenticateToken, verifyStructure(['document_id', 'dispute_description']), async (req, res) => {
+  const { document_id, dispute_description } = req.body;
+  const { userId, companyId } = req.user;
+
+  const { data, error } = await supabase
+    .from('disputes')
+    .insert([{
+      user_id: userId,
+      company_id: companyId,
+      document_id,
+      dispute_description
+    }])
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(201).json({ message: 'Dispute created successfully.', data });
+});
+
+// ✅ Get All Disputes (Role-Based Access)
+app.get('/disputes', authenticateToken, async (req, res) => {
+  const { userId, companyId, role } = req.user;
+  const roleLower = role.toLowerCase();
+
+  let query = supabase
+    .from('disputes')
+    .select('*')
+    .eq('company_id', companyId);
+
+  if (['client', 'qa', 'scanner', 'indexer'].includes(roleLower)) {
+    query = query.eq('user_id', userId);
+  }
+
+  const { data: disputes, error } = await query;
+  if (error) return res.status(400).json(error);
+
+  // 🧠 Fetch user + client names
+  const { data: users } = await supabase.from('users').select('id, name');
+  const { data: clients } = await supabase.from('clients').select('id, name');
+
+  const userMap = {};
+  (users || []).forEach(u => userMap[u.id] = u.name);
+  (clients || []).forEach(c => userMap[c.id] = c.name);
+
+  // 🎯 Enrich dispute with creator name
+  const enriched = disputes.map(d => ({
+    ...d,
+    created_by_name: userMap[d.user_id] || 'Unknown'
+  }));
+
+  res.status(200).json(enriched);
+});
+
+// ✅ Resolve a Dispute
+app.put('/disputes/:id/resolve', authenticateToken, async (req, res) => {
+  const disputeId = req.params.id;
+
+  const { data, error } = await supabase
+    .from('disputes')
+    .update({ resolve: true })
+    .eq('id', disputeId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Dispute marked as resolved.', data });
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
