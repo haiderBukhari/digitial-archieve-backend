@@ -800,8 +800,8 @@ app.post('/generate-invoices', authenticateToken, async (req, res) => {
   // Fetch all active companies
   const { data: companies, error } = await supabase
     .from('companies')
-    .select('id, name, contact_email, status, invoice_value_total, owner_name')
-    .eq('status', 'active');
+    .select('id, name, contact_email, status, invoice_value_total, admin_name')
+    .eq('status', 'Active');
 
   if (error) return res.status(400).json({ error: 'Failed to fetch companies' });
 
@@ -840,7 +840,7 @@ app.post('/generate-invoices', authenticateToken, async (req, res) => {
         company_name: company.name,
         email: company.contact_email,
         invoice_month: currentMonth,
-        owner_name: company.owner_name || 'Owner',
+        admin_name: company.admin_name || 'Owner',
         invoice_value: company.invoice_value_total || 0
       }])
       .select();
@@ -857,7 +857,7 @@ app.post('/generate-invoices', authenticateToken, async (req, res) => {
         <h2>Hi ${company.name},</h2>
         <p>Please find below your invoice summary for <strong>${currentMonth}</strong>:</p>
         <ul>
-          <li><strong>Owner:</strong> ${company.owner_name || 'Owner'}</li>
+          <li><strong>Owner:</strong> ${company.admin_name || 'Owner'}</li>
           <li><strong>Invoice Amount:</strong> $${company.invoice_value_total || 0}</li>
         </ul>
         <p>Thank you for using Talo Innovations.</p>
