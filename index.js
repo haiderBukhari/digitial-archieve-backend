@@ -145,6 +145,34 @@ app.delete('/plans/:id', async (req, res) => {
   res.sendStatus(204);
 });
 
+app.get('/get-plan-information', authenticateToken, async (req, res) => {
+  const { companyId } = req.user;
+
+  // Step 1: Fetch the company's plan_id
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select('plan_id')
+    .eq('id', companyId)
+    .single();
+
+  if (companyError || !company) {
+    return res.status(404).json({ error: 'Company not found or has no associated plan.' });
+  }
+
+  // Step 2: Fetch the plan details
+  const { data: plan, error: planError } = await supabase
+    .from('plans')
+    .select('can_share_document, can_view_activity_logs, can_add_client, number_of_clients')
+    .eq('id', company.plan_id)
+    .single();
+
+  if (planError || !plan) {
+    return res.status(404).json({ error: 'Plan not found.' });
+  }
+
+  res.status(200).json({ plan });
+});
+
 // -------------------------
 // 🏢 COMPANIES ENDPOINTS
 // -------------------------
