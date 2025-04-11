@@ -384,9 +384,9 @@ app.get('/documents', authenticateToken, async (req, res) => {
 
     const requestedBy = requestedById && usersMap[requestedById]
       ? {
-          name: usersMap[requestedById].name,
-          role: usersMap[requestedById].role
-        }
+        name: usersMap[requestedById].name,
+        role: usersMap[requestedById].role
+      }
       : null;
 
     return {
@@ -982,7 +982,7 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
     return res.status(404).json({ error: 'Shared document not found for this client.' });
   }
 
-  res.status(200).json({ document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.document_id}`,  });
+  res.status(200).json({ document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.document_id}`, });
 });
 
 app.get('/get-profile', authenticateToken, async (req, res) => {
@@ -1128,6 +1128,7 @@ app.get('/disputes', authenticateToken, async (req, res) => {
   const { userId, companyId, role } = req.user;
   const roleLower = role.toLowerCase();
 
+  // 📥 Step 1: Fetch disputes for the company or user
   let query = supabase
     .from('disputes')
     .select('*')
@@ -1140,7 +1141,9 @@ app.get('/disputes', authenticateToken, async (req, res) => {
   const { data: disputes, error } = await query;
   if (error) return res.status(400).json(error);
 
-  // 🧠 Fetch user + client names
+  if (!disputes.length) return res.json([]);
+
+  // 📥 Step 2: Fetch users and clients for names
   const { data: users } = await supabase.from('users').select('id, name');
   const { data: clients } = await supabase.from('clients').select('id, name');
 
@@ -1148,14 +1151,26 @@ app.get('/disputes', authenticateToken, async (req, res) => {
   (users || []).forEach(u => userMap[u.id] = u.name);
   (clients || []).forEach(c => userMap[c.id] = c.name);
 
-  // 🎯 Enrich dispute with creator name
+  // 📥 Step 3: Fetch document titles
+  const documentIds = disputes.map(d => d.document_id);
+  const { data: docs } = await supabase
+    .from('documents')
+    .select('id, title')
+    .in('id', documentIds);
+
+  const docMap = {};
+  (docs || []).forEach(doc => docMap[doc.id] = doc.title);
+
+  // 🧠 Step 4: Enrich disputes with names + document title
   const enriched = disputes.map(d => ({
     ...d,
-    created_by_name: userMap[d.user_id] || 'Unknown'
+    created_by_name: userMap[d.user_id] || 'Unknown',
+    document_name: docMap[d.document_id] || 'Unknown Document'
   }));
 
   res.status(200).json(enriched);
 });
+
 
 // ✅ Resolve a Dispute
 app.put('/disputes/:id/resolve', authenticateToken, async (req, res) => {
