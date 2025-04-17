@@ -1070,6 +1070,202 @@ app.post('/generate-invoices', async (req, res) => {
   res.status(200).json(results);
 });
 
+app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
+  const companyId = req.user.companyId;
+  const companyName = req.user.name || 'Company';
+  const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  // Get all clients of the company
+  const { data: clients, error: clientError } = await supabase
+    .from('clients')
+    .select('id, name, email, document_shared, document_downloaded, document_uploaded, plan_id')
+    .eq('company_id', companyId);
+
+  if (clientError) return res.status(400).json({ error: 'Failed to fetch clients' });
+
+  // Email transporter setup
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      type: 'OAuth2',
+      user: process.env.EMAIL_HOST,
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.OAUTH_REFRESH_TOKEN,
+    },
+  });
+
+  const results = [];
+
+  for (const client of clients) {
+    const { data: existing } = await supabase
+      .from('client_invoices')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('email', client.email)
+      .eq('invoice_month', currentMonth)
+      .single();
+
+    if (existing) {
+      results.push({ client: client.name, status: 'Invoice already exists' });
+      continue;
+    }
+
+    const { data: plan, error: planError } = await supabase
+      .from('client_plans')
+      .select('price_description, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand')
+      .eq('id', client.plan_id)
+      .single();
+
+    if (planError || !plan) {
+      results.push({ client: client.name, status: 'Failed to fetch plan info' });
+      continue;
+    }
+
+    const monthly = parseFloat(plan.price_description) || 0;
+    const docShared = client.document_shared || 0;
+    const docDownloaded = client.document_downloaded || 0;
+    const docUploaded = client.document_uploaded || 0;
+
+    const shared_amount = parseFloat(((docShared / 1000) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
+    const download_amount = parseFloat(((docDownloaded / 1000) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
+    const upload_amount = parseFloat(((docUploaded / 10) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
+
+    const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
+
+    // Insert invoice
+    const { error: insertError } = await supabase
+      .from('client_invoices')
+      .insert([{
+        company_id: companyId,
+        company_name: companyName,
+        email: client.email,
+        invoice_month: currentMonth,
+        owner_name: client.name,
+        invoice_value: total,
+        monthly,
+        document_shared: docShared,
+        shared_amount,
+        document_downloaded: docDownloaded,
+        download_amount,
+        document_uploaded: docUploaded,
+        upload_amount,
+        invoice_submitted: false
+      }]);
+
+    if (insertError) {
+      results.push({ client: client.name, status: 'Failed to create invoice' });
+      continue;
+    }
+
+    // Email invoice to client
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_HOST,
+        to: client.email,
+        subject: `Invoice - ${client.name} - ${currentMonth}`,
+        html: `
+          <div style="font-family: Arial;">
+            <h2>Hello ${client.name},</h2>
+            <p>Here is your invoice for <strong>${currentMonth}</strong>:</p>
+            <ul>
+              <li><strong>Base Plan:</strong> $${monthly.toFixed(2)}</li>
+              <li><strong>Documents Uploaded:</strong> ${docUploaded} ($${upload_amount.toFixed(2)})</li>
+              <li><strong>Documents Shared:</strong> ${docShared} ($${shared_amount.toFixed(2)})</li>
+              <li><strong>Documents Downloaded:</strong> ${docDownloaded} ($${download_amount.toFixed(2)})</li>
+              <li><strong><b>Total:</b></strong> $${total.toFixed(2)}</li>
+            </ul>
+            <p>Thanks,<br/>Talo Innovations</p>
+          </div>
+        `
+      });
+
+      // Reset client usage counters
+      await supabase
+        .from('clients')
+        .update({
+          document_shared: 0,
+          document_downloaded: 0,
+          document_uploaded: 0
+        })
+        .eq('id', client.id);
+
+      results.push({ client: client.name, status: 'Invoice created and emailed' });
+    } catch (err) {
+      results.push({ client: client.name, status: 'Email failed', error: err.message });
+    }
+  }
+
+  res.status(200).json(results);
+});
+
+app.post('/remind-unpaid-client-invoices', authenticateToken, async (req, res) => {
+  const companyId = req.user.companyId;
+  const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  const { data: unpaidInvoices, error } = await supabase
+    .from('client_invoices')
+    .select('email, owner_name, invoice_month, invoice_value')
+    .eq('company_id', companyId)
+    .eq('invoice_month', currentMonth)
+    .eq('invoice_submitted', false);
+
+  if (error) return res.status(400).json({ error: 'Failed to fetch unpaid invoices' });
+  if (!unpaidInvoices || unpaidInvoices.length === 0) return res.status(200).json({ message: 'No unpaid invoices found.' });
+
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      type: 'OAuth2',
+      user: process.env.EMAIL_HOST,
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.OAUTH_REFRESH_TOKEN,
+    },
+  });
+
+  const results = [];
+
+  for (const invoice of unpaidInvoices) {
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_HOST,
+        to: invoice.email,
+        subject: `Reminder: Unpaid Invoice - ${invoice.owner_name} - ${invoice.invoice_month}`,
+        html: `
+          <div style="font-family: Arial;">
+            <h2>Hello ${invoice.owner_name},</h2>
+            <p>This is a friendly reminder that your invoice for <strong>${invoice.invoice_month}</strong> is still unpaid.</p>
+            <p><strong>Invoice Amount:</strong> $${invoice.invoice_value}</p>
+            <p>Please make payment at your earliest convenience to continue uninterrupted service.</p>
+            <p>Thank you,<br/>Talo Innovations</p>
+          </div>
+        `
+      });
+
+      results.push({ email: invoice.email, status: 'Reminder sent' });
+    } catch (err) {
+      results.push({ email: invoice.email, status: 'Failed to send reminder', error: err.message });
+    }
+  }
+
+  res.status(200).json(results);
+});
+
+
+app.get('/client-invoices', authenticateToken, async (req, res) => {
+  const { companyId } = req.user;
+
+  const { data: invoices, error } = await supabase
+    .from('client_invoices')
+    .select('*')
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false });
+
+  if (error) return res.status(400).json({ error: 'Failed to fetch client invoices' });
+
+  res.status(200).json(invoices);
+});
 
 app.get('/invoices', authenticateToken, async (req, res) => {
   const { role, companyId } = req.user;
