@@ -866,13 +866,15 @@ app.delete('/clients/:id', async (req, res) => {
 app.post('/generate-invoices', async (req, res) => {
   const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
 
-  // Fetch all active companies
-  const { data: companies, error } = await supabase
+  const { data: companies, error: companyError } = await supabase
     .from('companies')
-    .select('id, name, contact_email, status, invoice_value_total, admin_name')
+    .select(`
+      id, name, contact_email, status, invoice_value_total, admin_name, plan_id,
+      document_shared, document_downloaded, document_uploaded
+    `)
     .eq('status', 'Active');
 
-  if (error) return res.status(400).json({ error: 'Failed to fetch companies' });
+  if (companyError) return res.status(400).json({ error: 'Failed to fetch companies' });
 
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -888,7 +890,6 @@ app.post('/generate-invoices', async (req, res) => {
   const results = [];
 
   for (const company of companies) {
-    // Check if invoice exists for this month
     const { data: existingInvoice } = await supabase
       .from('invoices')
       .select('*')
@@ -896,41 +897,54 @@ app.post('/generate-invoices', async (req, res) => {
       .eq('invoice_month', currentMonth)
       .single();
 
-    // CASE 1: Invoice exists and has been paid
+    // ✅ CASE 1: Already Paid
     if (existingInvoice && existingInvoice.invoice_submitted === true) {
       results.push({ company: company.name, status: 'Already paid' });
       continue;
     }
 
-    // CASE 2: Invoice exists but unpaid — send reminder email
+    // ⚠️ CASE 2: Unpaid Invoice Reminder
     if (existingInvoice && existingInvoice.invoice_submitted === false) {
       try {
         await transporter.sendMail({
           from: process.env.EMAIL_HOST,
           to: company.contact_email,
           subject: `Reminder: Invoice - ${company.name} - ${currentMonth}`,
-          html: `
-            <div style="font-family: Arial, sans-serif; padding: 20px;">
+          html: `<div style="font-family: Arial;">
               <h2>Hi ${company.name},</h2>
-              <p>This is a reminder that your invoice for <strong>${currentMonth}</strong> is still unpaid.</p>
-              <ul>
-                <li><strong>Owner:</strong> ${company.admin_name || 'Owner'}</li>
-                <li><strong>Invoice Amount:</strong> $${company.invoice_value_total || 0}</li>
-              </ul>
-              <p>Please settle your invoice to continue uninterrupted service.</p>
-              <p>Thank you,<br/>Talo Innovations</p>
-            </div>
-          `,
+              <p>This is a reminder your invoice for <strong>${currentMonth}</strong> is still unpaid.</p>
+              <p>Kindly settle it to avoid service interruption.</p>
+              <p>Thanks,<br/>Talo Innovations</p>
+          </div>`
         });
-
-        results.push({ company: company.name, status: 'Reminder email sent for unpaid invoice' });
+        results.push({ company: company.name, status: 'Reminder email sent' });
       } catch (err) {
-        results.push({ company: company.name, status: 'Email failed', error: err.message });
+        results.push({ company: company.name, status: 'Reminder failed', error: err.message });
       }
       continue;
     }
 
-    // CASE 3: No invoice exists — create and send email
+    // 📊 Get plan info
+    const { data: plan } = await supabase
+      .from('plans')
+      .select('price_description, document_price_per_thousand, share_price_per_thousand, upload_price_per_ten')
+      .eq('id', company.plan_id)
+      .single();
+
+    const monthly = parseFloat(plan.price_description) || 0;
+
+    // 🧮 Usage values
+    const docShared = company.document_shared || 0;
+    const docDownloaded = company.document_downloaded || 0;
+    const docUploaded = company.document_uploaded || 0;
+
+    const shared_amount = (docShared / 1000) * parseFloat(plan.share_price_per_thousand || 0);
+    const download_amount = (docDownloaded / 1000) * parseFloat(plan.document_price_per_thousand || 0);
+    const upload_amount = (docUploaded / 10) * parseFloat(plan.upload_price_per_ten || 0);
+
+    const total = parseFloat(monthly) + shared_amount + upload_amount + download_amount;
+
+    // 🧾 Insert invoice
     const { data: invoice, error: insertError } = await supabase
       .from('invoices')
       .insert([{
@@ -939,7 +953,14 @@ app.post('/generate-invoices', async (req, res) => {
         email: company.contact_email,
         invoice_month: currentMonth,
         owner_name: company.admin_name || 'Owner',
-        invoice_value: company.invoice_value_total || 0,
+        invoice_value: total,
+        monthly,
+        document_shared: docShared,
+        shared_amount,
+        document_downloaded: docDownloaded,
+        download_amount,
+        document_uploaded: docUploaded,
+        upload_amount,
         invoice_submitted: false
       }])
       .select();
@@ -949,23 +970,37 @@ app.post('/generate-invoices', async (req, res) => {
       continue;
     }
 
+    // 📧 Send email
     try {
       await transporter.sendMail({
         from: process.env.EMAIL_HOST,
         to: company.contact_email,
         subject: `Invoice - ${company.name} - ${currentMonth}`,
         html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2>Hi ${company.name},</h2>
-            <p>Please find your invoice summary for <strong>${currentMonth}</strong>:</p>
+          <div style="font-family: Arial;">
+            <h2>Hello ${company.name},</h2>
+            <p>Here is your invoice for <strong>${currentMonth}</strong>:</p>
             <ul>
-              <li><strong>Owner:</strong> ${company.admin_name || 'Owner'}</li>
-              <li><strong>Invoice Amount:</strong> $${company.invoice_value_total || 0}</li>
+              <li><strong>Base Plan:</strong> $${monthly}</li>
+              <li><strong>Documents Uploaded:</strong> ${docUploaded} ($${upload_amount.toFixed(2)})</li>
+              <li><strong>Documents Shared:</strong> ${docShared} ($${shared_amount.toFixed(2)})</li>
+              <li><strong>Documents Downloaded:</strong> ${docDownloaded} ($${download_amount.toFixed(2)})</li>
+              <li><strong><b>Total:</b></strong> $${total.toFixed(2)}</li>
             </ul>
-            <p>Thank you for using Talo Innovations.</p>
+            <p>Thanks,<br/>Talo Innovations</p>
           </div>
-        `,
+        `
       });
+
+      // 🔁 Reset company counters
+      await supabase
+        .from('companies')
+        .update({
+          document_shared: 0,
+          document_uploaded: 0,
+          document_downloaded: 0
+        })
+        .eq('id', company.id);
 
       results.push({ company: company.name, status: 'Invoice created and emailed' });
     } catch (err) {
