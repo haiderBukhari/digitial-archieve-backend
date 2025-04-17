@@ -545,24 +545,41 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   const { data: insertedDoc, error: insertError } = await supabase.from('documents').insert([document]).select();
   if (insertError) return res.status(400).json(insertError);
 
-  // 4. Increment document_uploaded in company table
-  const { data: company, error: companyError } = await supabase
-    .from('companies')
-    .select('document_uploaded')
-    .eq('id', company_id)
-    .single();
+  // 4. Update document_uploaded
+  if (role.toLowerCase() === 'client') {
+    // 👉 Update in clients table
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('document_uploaded')
+      .eq('id', added_by)
+      .single();
 
-  if (!companyError && company) {
-    const currentUploaded = company.document_uploaded || 0;
-    await supabase
+    if (!clientError && client) {
+      const currentUploaded = client.document_uploaded || 0;
+      await supabase
+        .from('clients')
+        .update({ document_uploaded: currentUploaded + 1 })
+        .eq('id', added_by);
+    }
+  } else {
+    // 👉 Update in companies table
+    const { data: company, error: companyError } = await supabase
       .from('companies')
-      .update({ document_uploaded: currentUploaded + 1 })
-      .eq('id', company_id);
+      .select('document_uploaded')
+      .eq('id', company_id)
+      .single();
+
+    if (!companyError && company) {
+      const currentUploaded = company.document_uploaded || 0;
+      await supabase
+        .from('companies')
+        .update({ document_uploaded: currentUploaded + 1 })
+        .eq('id', company_id);
+    }
   }
 
   res.status(201).json(insertedDoc);
 });
-
 
 app.get('/documents/:id', authenticateToken, async (req, res) => {
   const documentId = req.params.id;
@@ -1532,7 +1549,7 @@ app.post('/get-shared-document', verifyStructure(['document_id', 'document_passw
 
 // 📥 Get Shared Document URL (Client only)
 app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
-  const { userId, role } = req.user;
+  const { userId, role, companyId } = req.user;
   const { document_id } = req.params;
 
   const { data, error } = await supabase
@@ -1542,17 +1559,47 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
     .single();
 
   if (error || !data) {
-    return res.status(404).json({ error: 'Shared document not found for this client.' });
+    return res.status(404).json({ error: 'Shared document not found.' });
   }
 
-  res.status(200).json({ document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.document_id}`, });
+  // ✅ Increment download count
+  if (role.toLowerCase() === 'client') {
+    const { data: client } = await supabase
+      .from('clients')
+      .select('document_downloaded')
+      .eq('id', userId)
+      .single();
+
+    if (client) {
+      await supabase
+        .from('clients')
+        .update({ document_downloaded: (client.document_downloaded || 0) + 1 })
+        .eq('id', userId);
+    }
+  } else {
+    const { data: company } = await supabase
+      .from('companies')
+      .select('document_downloaded')
+      .eq('id', companyId)
+      .single();
+
+    if (company) {
+      await supabase
+        .from('companies')
+        .update({ document_downloaded: (company.document_downloaded || 0) + 1 })
+        .eq('id', companyId);
+    }
+  }
+
+  res.status(200).json({
+    document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.document_id}`
+  });
 });
 
 app.get('/download-document/:document_id', authenticateToken, async (req, res) => {
   const { document_id } = req.params;
-  const { companyId } = req.user;
+  const { companyId, userId, role } = req.user;
 
-  // 1. Fetch the document using document_id
   const { data: document, error: docError } = await supabase
     .from('documents')
     .select('url')
@@ -1563,26 +1610,37 @@ app.get('/download-document/:document_id', authenticateToken, async (req, res) =
     return res.status(404).json({ error: 'Document not found.' });
   }
 
-  // 2. Increment document_downloaded in companies table
-  const { data: company, error: companyError } = await supabase
-    .from('companies')
-    .select('document_downloaded')
-    .eq('id', companyId)
-    .single();
+  // ✅ Increment download count
+  if (role.toLowerCase() === 'client') {
+    const { data: client } = await supabase
+      .from('clients')
+      .select('document_downloaded')
+      .eq('id', userId)
+      .single();
 
-  if (!companyError && company) {
-    const currentDownloaded = company.document_downloaded || 0;
-
-    await supabase
+    if (client) {
+      await supabase
+        .from('clients')
+        .update({ document_downloaded: (client.document_downloaded || 0) + 1 })
+        .eq('id', userId);
+    }
+  } else {
+    const { data: company } = await supabase
       .from('companies')
-      .update({ document_downloaded: currentDownloaded + 1 })
-      .eq('id', companyId);
+      .select('document_downloaded')
+      .eq('id', companyId)
+      .single();
+
+    if (company) {
+      await supabase
+        .from('companies')
+        .update({ document_downloaded: (company.document_downloaded || 0) + 1 })
+        .eq('id', companyId);
+    }
   }
 
-  // 3. Respond with the download URL
   res.status(200).json({ document_url: document.url });
 });
-
 
 app.get('/get-profile', authenticateToken, async (req, res) => {
   const { userId } = req.user;
