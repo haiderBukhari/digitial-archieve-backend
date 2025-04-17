@@ -2016,4 +2016,56 @@ app.get('/stats', async (req, res) => {
   }
 });
 
+app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
+  const { companyId } = req.user;
+
+  // Step 1: Get all clients under the company
+  const { data: clients, error: clientError } = await supabase
+    .from('clients')
+    .select('id, name, email, document_downloaded')
+    .eq('company_id', companyId);
+
+  if (clientError) {
+    return res.status(400).json({ error: 'Failed to fetch clients', clientError });
+  }
+
+  let totalInvoiceValue = 0;
+  let totalInvoicesPaid = 0;
+  let totalDocumentsDownloaded = 0;
+
+  // Email list for filtering invoices
+  const clientEmails = clients.map(client => client.email);
+
+  // Step 2: Fetch all client_invoices under those emails
+  const { data: invoices, error: invoiceError } = await supabase
+    .from('client_invoices')
+    .select('invoice_value, invoice_submitted, email')
+    .in('email', clientEmails);
+
+  if (invoiceError) {
+    return res.status(400).json({ error: 'Failed to fetch invoices', invoiceError });
+  }
+
+  // Step 3: Aggregate stats
+  for (const invoice of invoices) {
+    totalInvoiceValue += parseFloat(invoice.invoice_value || 0);
+    if (invoice.invoice_submitted) totalInvoicesPaid++;
+  }
+
+  for (const client of clients) {
+    totalDocumentsDownloaded += client.document_downloaded || 0;
+  }
+
+  res.status(200).json({
+    totalInvoiceValue: totalInvoiceValue.toFixed(2),
+    totalInvoicesPaid,
+    totalDocumentsDownloaded,
+    clients: clients.map(c => ({
+      id: c.id,
+      name: c.name,
+      email: c.email
+    }))
+  });
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
