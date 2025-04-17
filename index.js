@@ -452,6 +452,7 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   const added_by = req.user.userId;
   const role = req.user.role;
 
+  // Get tag properties
   const { data: tagData, error: tagError } = await supabase
     .from('document_tags')
     .select('properties')
@@ -468,10 +469,10 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   const document = {
     url,
     company_id,
-    title: title,
+    title,
     progress: 'Incomplete',
     tag_id,
-    progress_number: (role === 'Owner' || role === 'Manager' || role == 'Client') ? 1 : role === 'Scanner' ? 1 : 1,
+    progress_number: (role === 'Owner' || role === 'Manager' || role === 'Client') ? 1 : 1,
     indexer_passed_id: null,
     qa_passed_id: null,
     passed_to: null,
@@ -483,8 +484,18 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
     file_id
   };
 
+  // Insert the document
   const { data, error } = await supabase.from('documents').insert([document]).select();
   if (error) return res.status(400).json(error);
+
+  // Increment document_uploaded count
+  const { error: companyUpdateError } = await supabase
+    .rpc('increment_document_uploaded', { company_id_input: company_id });
+
+  if (companyUpdateError) {
+    return res.status(500).json({ error: 'Document created, but failed to update company stats.' });
+  }
+
   res.status(201).json(data);
 });
 
@@ -1056,15 +1067,21 @@ app.post('/share-document', authenticateToken, verifyStructure(['document_link',
 
   if (shareError) return res.status(400).json(shareError);
 
-  const { error: updateError } = await supabase
+  const { error: updateDocError } = await supabase
     .from('documents')
     .update({ shared: true })
     .eq('id', document_id)
     .eq('company_id', companyId);
 
-  if (updateError) return res.status(400).json(updateError);
+  if (updateDocError) return res.status(400).json(updateDocError);
 
-  res.status(201).json({ message: 'Document shared successfully.', shared });
+  // 3. Increment document_shared in companies table
+  const { error: updateCompanyError } = await supabase
+    .rpc('increment_document_shared', { company_id_input: companyId });
+
+  if (updateCompanyError) return res.status(400).json({ error: 'Document shared but failed to update company stat.', updateCompanyError });
+
+  res.status(201).json({ message: 'Document shared successfully and company stat updated.', shared });
 });
 
 app.post('/get-shared-document', verifyStructure(['document_id', 'document_password']), async (req, res) => {
