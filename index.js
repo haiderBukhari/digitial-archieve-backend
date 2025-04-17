@@ -221,7 +221,7 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
   // Step 3: Insert company
   const { data: companyData, error: createError } = await supabase
     .from('companies')
-    .insert([{ name, contact_email, password_hash, plan_id, admin_name, invoice_value_total: plan.price_description }])
+    .insert([{ name, contact_email, password_hash, plan_id, admin_name }])
     .select();
 
   if (createError) return res.status(400).json(createError);
@@ -869,7 +869,7 @@ app.post('/generate-invoices', async (req, res) => {
   const { data: companies, error: companyError } = await supabase
     .from('companies')
     .select(`
-      id, name, contact_email, status, invoice_value_total, admin_name, plan_id,
+      id, name, contact_email, status, admin_name, plan_id,
       document_shared, document_downloaded, document_uploaded
     `)
     .eq('status', 'Active');
@@ -925,11 +925,16 @@ app.post('/generate-invoices', async (req, res) => {
     }
 
     // 📊 Get plan info
-    const { data: plan } = await supabase
+    const { data: plan, error: planError } = await supabase
       .from('plans')
-      .select('price_description, document_price_per_thousand, share_price_per_thousand, upload_price_per_ten')
+      .select('price_description, download_price_per_thousand, share_price_per_thousand, upload_price_per_ten')
       .eq('id', company.plan_id)
       .single();
+
+    if (planError || !plan) {
+      results.push({ company: company.name, status: 'Failed to fetch plan info' });
+      continue;
+    }
 
     const monthly = parseFloat(plan.price_description) || 0;
 
@@ -938,12 +943,12 @@ app.post('/generate-invoices', async (req, res) => {
     const docDownloaded = company.document_downloaded || 0;
     const docUploaded = company.document_uploaded || 0;
 
-    const shared_amount = (docShared / 1000) * parseFloat(plan.share_price_per_thousand || 0);
-    const download_amount = (docDownloaded / 1000) * parseFloat(plan.document_price_per_thousand || 0);
-    const upload_amount = (docUploaded / 10) * parseFloat(plan.upload_price_per_ten || 0);
-
-    const total = parseFloat(monthly) + shared_amount + upload_amount + download_amount;
-
+    const shared_amount = parseFloat(((docShared || 0) / 1000 * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
+    const download_amount = parseFloat(((docDownloaded || 0) / 1000 * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
+    const upload_amount = parseFloat(((docUploaded || 0) / 10 * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
+    
+    const total = parseFloat((parseFloat(monthly) + shared_amount + download_amount + upload_amount).toFixed(4));
+    
     // 🧾 Insert invoice
     const { data: invoice, error: insertError } = await supabase
       .from('invoices')
@@ -981,7 +986,7 @@ app.post('/generate-invoices', async (req, res) => {
             <h2>Hello ${company.name},</h2>
             <p>Here is your invoice for <strong>${currentMonth}</strong>:</p>
             <ul>
-              <li><strong>Base Plan:</strong> $${monthly}</li>
+              <li><strong>Base Plan:</strong> $${monthly.toFixed(2)}</li>
               <li><strong>Documents Uploaded:</strong> ${docUploaded} ($${upload_amount.toFixed(2)})</li>
               <li><strong>Documents Shared:</strong> ${docShared} ($${shared_amount.toFixed(2)})</li>
               <li><strong>Documents Downloaded:</strong> ${docDownloaded} ($${download_amount.toFixed(2)})</li>
@@ -1010,6 +1015,7 @@ app.post('/generate-invoices', async (req, res) => {
 
   res.status(200).json(results);
 });
+
 
 app.get('/invoices', authenticateToken, async (req, res) => {
   const { role, companyId } = req.user;
