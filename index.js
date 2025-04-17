@@ -1301,48 +1301,77 @@ app.get('/invoices', authenticateToken, async (req, res) => {
   if (error) return res.status(400).json(error);
   res.json(data);
 });
-
 app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   const invoiceId = req.params.id;
   const role = req.user.role.toLowerCase();
 
-  // Fetch the invoice first
+  // 1️⃣ Try to fetch from invoices table first
   const { data: invoice, error: fetchError } = await supabase
     .from('invoices')
     .select('id, invoice_submitted')
     .eq('id', invoiceId)
     .single();
 
-  if (fetchError || !invoice) {
-    return res.status(404).json({ error: 'Invoice not found.' });
-  }
-
-  if (role === 'admin') {
-    // ✅ Admin: only update invoice_submitted_admin if invoice_submitted is true
-    if (invoice.invoice_submitted === true) {
+  if (invoice) {
+    // 👉 If invoice found in invoices table
+    if (role === 'admin') {
+      if (invoice.invoice_submitted === true) {
+        const { data, error } = await supabase
+          .from('invoices')
+          .update({ invoice_submitted_admin: true })
+          .eq('id', invoiceId)
+          .select();
+        if (error) return res.status(400).json(error);
+        return res.json({ message: 'Admin confirmed invoice submission.', data });
+      } else {
+        return res.status(400).json({ error: 'Invoice must be submitted first by the company.' });
+      }
+    } else {
       const { data, error } = await supabase
         .from('invoices')
-        .update({ invoice_submitted_admin: true })
+        .update({ invoice_submitted: true })
         .eq('id', invoiceId)
         .select();
-
       if (error) return res.status(400).json(error);
-      return res.json({ message: 'Admin confirmed invoice submission.', data });
+      return res.json({ message: 'Invoice marked as submitted by company.', data });
+    }
+  }
+
+  // 2️⃣ Not found in invoices → check client_invoices table
+  const { data: clientInvoice, error: clientError } = await supabase
+    .from('client_invoices')
+    .select('id, invoice_submitted')
+    .eq('id', invoiceId)
+    .single();
+
+  if (clientError || !clientInvoice) {
+    return res.status(404).json({ error: 'Invoice not found in either table.' });
+  }
+
+  // 👉 Handle submission for client invoice
+  if (role === 'admin') {
+    if (clientInvoice.invoice_submitted === true) {
+      const { data, error } = await supabase
+        .from('client_invoices')
+        .update({ invoice_submitted_owner: true })
+        .eq('id', invoiceId)
+        .select();
+      if (error) return res.status(400).json(error);
+      return res.json({ message: 'Admin confirmed client invoice submission.', data });
     } else {
-      return res.status(400).json({ error: 'Invoice must be submitted first by the company.' });
+      return res.status(400).json({ error: 'Client invoice must be submitted first.' });
     }
   } else {
-    // ✅ Owner or others: mark invoice as submitted
     const { data, error } = await supabase
-      .from('invoices')
+      .from('client_invoices')
       .update({ invoice_submitted: true })
       .eq('id', invoiceId)
       .select();
-
     if (error) return res.status(400).json(error);
-    return res.json({ message: 'Invoice marked as submitted by company.', data });
+    return res.json({ message: 'Client invoice marked as submitted.', data });
   }
 });
+
 
 const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
   if (!companyName || !email || !password || !loginLink) {
