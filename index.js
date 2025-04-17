@@ -801,7 +801,7 @@ app.get('/client-plans/:id', authenticateToken, async (req, res) => {
 });
 
 // Create a plan
-app.post('/client-plans', authenticateToken, verifyStructure(['name', 'monthly_bill', 'subscription_begin']), async (req, res) => {
+app.post('/client-plans', authenticateToken, verifyStructure(['name', 'monthly_bill']), async (req, res) => {
   const companyId = req.user.companyId;
   const payload = {
     ...req.body,
