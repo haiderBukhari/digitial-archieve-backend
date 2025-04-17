@@ -188,9 +188,63 @@ app.get('/companies', async (req, res) => {
 });
 
 app.get('/companies/:id', async (req, res) => {
-  const { data, error } = await supabase.from('companies').select('*').eq('id', req.params.id).single();
-  if (error) return res.status(400).json(error);
-  res.json(data);
+  const companyId = req.params.id;
+
+  // 1. Get Company
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select('*')
+    .eq('id', companyId)
+    .single();
+  if (companyError || !company) return res.status(404).json({ error: 'Company not found' });
+
+  // 2. Get Users
+  const { data: users, error: userError } = await supabase
+    .from('users')
+    .select('id, name, email, phone, role, documents_reviewed, status')
+    .eq('company_id', companyId);
+  if (userError) return res.status(400).json({ error: 'Failed to fetch users' });
+
+  // 3. Get Plan
+  const { data: plan, error: planError } = await supabase
+    .from('plans')
+    .select('id, name, price_description, can_share_document, can_view_activity_logs, can_add_client, number_of_clients, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand')
+    .eq('id', company.plan_id)
+    .single();
+  if (planError) return res.status(400).json({ error: 'Failed to fetch plan info' });
+
+  // 4. Get Invoices
+  const { data: invoices, error: invoiceError } = await supabase
+    .from('invoices')
+    .select('id, invoice_month, invoice_value, monthly, invoice_submitted, created_at')
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false });
+  if (invoiceError) return res.status(400).json({ error: 'Failed to fetch invoices' });
+
+  // 5. Get Total Documents Uploaded
+  const { count: total_documents_uploaded, error: docCountError } = await supabase
+    .from('documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('company_id', companyId);
+  if (docCountError) return res.status(400).json({ error: 'Failed to count uploaded documents' });
+
+  // 6. Get Total Documents Published
+  const { count: total_documents_published, error: pubCountError } = await supabase
+    .from('documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('is_published', true);
+  if (pubCountError) return res.status(400).json({ error: 'Failed to count published documents' });
+
+  // ✅ Final response
+  res.status(200).json({
+    ...company,
+    users,
+    plan,
+    invoices,
+    total_documents_uploaded,
+    total_documents_published
+  });
 });
 
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
