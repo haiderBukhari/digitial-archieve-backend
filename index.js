@@ -609,6 +609,67 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
   res.json({ ...document, showMore });
 });
 
+app.put('/documents/:id/add-comment', authenticateToken, verifyStructure(['comment']), async (req, res) => {
+  const documentId = req.params.id;
+  const { comment } = req.body;
+  const { userId, role } = req.user;
+
+  // Get user's name based on role
+  let userName = '';
+  if (role.toLowerCase() === 'client') {
+    const { data: client, error } = await supabase
+      .from('clients')
+      .select('name')
+      .eq('id', userId)
+      .single();
+
+    if (error || !client) return res.status(404).json({ error: 'Client not found' });
+    userName = client.name;
+  } else {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', userId)
+      .single();
+
+    if (error || !user) return res.status(404).json({ error: 'User not found' });
+    userName = user.name;
+  }
+
+  // Fetch existing comments from the document
+  const { data: doc, error: docError } = await supabase
+    .from('documents')
+    .select('comments')
+    .eq('id', documentId)
+    .single();
+
+  if (docError || !doc) return res.status(404).json({ error: 'Document not found' });
+
+  const existingComments = doc.comments || [];
+
+  // Append new comment
+  const updatedComments = [
+    ...existingComments,
+    {
+      comment,
+      added_by: userId,
+      role,
+      name: userName,
+      timestamp: new Date().toISOString()
+    }
+  ];
+
+  // Update the document
+  const { data, error: updateError } = await supabase
+    .from('documents')
+    .update({ comments: updatedComments })
+    .eq('id', documentId)
+    .select();
+
+  if (updateError) return res.status(400).json(updateError);
+  res.status(200).json({ message: 'Comment added successfully', data });
+});
+
 app.put('/documents/:id', async (req, res) => {
   const { data, error } = await supabase.from('documents').update(req.body).eq('id', req.params.id).select();
   if (error) return res.status(400).json(error);
