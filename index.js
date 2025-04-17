@@ -1265,12 +1265,35 @@ app.get('/client-invoices', authenticateToken, async (req, res) => {
 
   res.status(200).json(invoices);
 });
-
 app.get('/invoices', authenticateToken, async (req, res) => {
-  const { role, companyId } = req.user;
-  let query = supabase.from('invoices').select('*');
+  const { role, companyId, userId } = req.user;
+  const roleLower = role.toLowerCase();
 
-  if (role.toLowerCase() === 'owner') {
+  // If client, fetch their email first
+  if (roleLower === 'client') {
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('email')
+      .eq('id', userId)
+      .single();
+
+    if (clientError || !client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const { data: clientInvoices, error: invoiceError } = await supabase
+      .from('client_invoices')
+      .select('*')
+      .eq('email', client.email)
+      .order('created_at', { ascending: false });
+
+    if (invoiceError) return res.status(400).json(invoiceError);
+    return res.json(clientInvoices);
+  }
+
+  // If owner/admin, fetch all company invoices
+  let query = supabase.from('invoices').select('*');
+  if (roleLower === 'owner') {
     query = query.eq('company_id', companyId);
   }
 
