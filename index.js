@@ -1147,6 +1147,42 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
   res.status(200).json({ document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.document_id}`, });
 });
 
+app.get('/download-document/:document_id', authenticateToken, async (req, res) => {
+  const { document_id } = req.params;
+  const { companyId } = req.user;
+
+  // 1. Fetch the document using document_id
+  const { data: document, error: docError } = await supabase
+    .from('documents')
+    .select('url')
+    .eq('id', document_id)
+    .single();
+
+  if (docError || !document) {
+    return res.status(404).json({ error: 'Document not found.' });
+  }
+
+  // 2. Increment document_downloaded in companies table
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select('document_downloaded')
+    .eq('id', companyId)
+    .single();
+
+  if (!companyError && company) {
+    const currentDownloaded = company.document_downloaded || 0;
+
+    await supabase
+      .from('companies')
+      .update({ document_downloaded: currentDownloaded + 1 })
+      .eq('id', companyId);
+  }
+
+  // 3. Respond with the download URL
+  res.status(200).json({ document_url: document.url });
+});
+
+
 app.get('/get-profile', authenticateToken, async (req, res) => {
   const { userId } = req.user;
 
