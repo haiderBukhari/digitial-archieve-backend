@@ -1516,7 +1516,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
             .eq('id', invoiceId)
             .select();
           if (error) return res.status(400).json(error);
-          return res.json({ message: 'Client invoice marked as submitted.', data });
+          return res.json({ role: role, message: 'Client invoice marked as submitted.', data });
         }
 
       }
