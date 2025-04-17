@@ -2031,12 +2031,12 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
 
   let totalInvoiceValue = 0;
   let totalInvoicesPaid = 0;
+  let totalPaidAmount = 0;
   let totalDocumentsDownloaded = 0;
 
-  // Email list for filtering invoices
   const clientEmails = clients.map(client => client.email);
 
-  // Step 2: Fetch all client_invoices under those emails
+  // Step 2: Fetch all invoices using client emails
   const { data: invoices, error: invoiceError } = await supabase
     .from('client_invoices')
     .select('invoice_value, invoice_submitted, email')
@@ -2046,10 +2046,15 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'Failed to fetch invoices', invoiceError });
   }
 
-  // Step 3: Aggregate stats
+  // Step 3: Aggregate values
   for (const invoice of invoices) {
-    totalInvoiceValue += parseFloat(invoice.invoice_value || 0);
-    if (invoice.invoice_submitted) totalInvoicesPaid++;
+    const value = parseFloat(invoice.invoice_value || 0);
+    totalInvoiceValue += value;
+
+    if (invoice.invoice_submitted) {
+      totalInvoicesPaid++;
+      totalPaidAmount += value;
+    }
   }
 
   for (const client of clients) {
@@ -2058,6 +2063,7 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
 
   res.status(200).json({
     totalInvoiceValue: totalInvoiceValue.toFixed(2),
+    totalPaidAmount: totalPaidAmount.toFixed(2),
     totalInvoicesPaid,
     totalDocumentsDownloaded,
     clients: clients.map(c => ({
@@ -2067,5 +2073,6 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
     }))
   });
 });
+
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
