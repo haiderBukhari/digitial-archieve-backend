@@ -1113,7 +1113,7 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
 
     const { data: plan, error: planError } = await supabase
       .from('client_plans')
-      .select('price_description, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand')
+      .select('monthly_bill, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand')
       .eq('id', client.plan_id)
       .single();
 
@@ -1122,7 +1122,7 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
       continue;
     }
 
-    const monthly = parseFloat(plan.price_description) || 0;
+    const monthly = parseFloat(plan.monthly_bill) || 0;
     const docShared = client.document_shared || 0;
     const docDownloaded = client.document_downloaded || 0;
     const docUploaded = client.document_uploaded || 0;
@@ -1251,7 +1251,6 @@ app.post('/remind-unpaid-client-invoices', authenticateToken, async (req, res) =
 
   res.status(200).json(results);
 });
-
 
 app.get('/client-invoices', authenticateToken, async (req, res) => {
   const { companyId } = req.user;
