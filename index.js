@@ -247,6 +247,49 @@ app.get('/companies/:id', async (req, res) => {
   });
 });
 
+app.get('/client/:id', async (req, res) => {
+  const clientId = req.params.id;
+
+  // 1. Get client by ID
+  const { data: client, error: clientError } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('id', clientId)
+
+  if (clientError || !client) {
+    return res.status(404).json({ error: 'Client not found.' });
+  }
+
+  // 2. Get plan info
+  const { data: plan, error: planError } = await supabase
+    .from('client_plans')
+    .select('id, name, monthly_bill, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand')
+    .eq('id', client[0].plan_id)
+    .single();
+
+  if (planError) {
+    return res.status(400).json({ error: 'Failed to fetch client plan' });
+  }
+
+  // 3. Get invoices for the client
+  const { data: invoices, error: invoiceError } = await supabase
+    .from('client_invoices')
+    .select('id, invoice_month, invoice_value, monthly, invoice_submitted, created_at')
+    .eq('email', client[0].email)
+    .order('created_at', { ascending: false });
+
+  if (invoiceError) {
+    return res.status(400).json({ error: 'Failed to fetch client invoices' });
+  }
+
+  // ✅ Final response
+  res.status(200).json({
+    ...client[0],
+    plan,
+    invoices
+  });
+});
+
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
   const { name, contact_email, password_hash, plan_id, admin_name } = req.body;
 
