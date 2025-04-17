@@ -2063,8 +2063,7 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
 
   res.status(200).json({
     totalInvoiceValue: totalInvoiceValue.toFixed(2),
-    totalPaidAmount: totalPaidAmount.toFixed(2),
-    totalInvoicesPaid,
+    totalInvoicesPaid: totalPaidAmount.toFixed(2),
     totalDocumentsDownloaded,
     clients: clients.map(c => ({
       id: c.id,
