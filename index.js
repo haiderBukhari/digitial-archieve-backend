@@ -1508,4 +1508,37 @@ app.put('/disputes/:id/resolve', authenticateToken, async (req, res) => {
   res.status(200).json({ message: 'Dispute marked as resolved.', data });
 });
 
+app.get('/stats', async (req, res) => {
+  try {
+    // 1. Get all invoices
+    const { data: invoices, error: invoiceError } = await supabase
+      .from('invoices')
+      .select('invoice_value');
+
+    if (invoiceError) return res.status(400).json({ error: 'Failed to fetch invoices', details: invoiceError });
+
+    const totalInvoiceAmount = invoices.reduce((sum, inv) => sum + parseFloat(inv.invoice_value || 0), 0);
+
+    // 2. Get all documents
+    const { data: documents, error: docError } = await supabase
+      .from('documents')
+      .select('is_published');
+
+    if (docError) return res.status(400).json({ error: 'Failed to fetch documents', details: docError });
+
+    const totalDocumentsUploaded = documents.length;
+    const totalDocumentsPublished = documents.filter(doc => doc.is_published === true).length;
+
+    // 3. Return system-wide stats
+    res.status(200).json({
+      totalInvoiceAmount: totalInvoiceAmount.toFixed(2),
+      totalDocumentsUploaded,
+      totalDocumentsPublished
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: 'Unexpected error', message: err.message });
+  }
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
