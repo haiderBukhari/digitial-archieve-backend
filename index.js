@@ -1538,7 +1538,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   }
 
   // 👉 Handle submission for client invoice
-  if (role === 'admin') {
+  if (role === 'owner') {
     if (clientInvoice.invoice_submitted === true) {
       const { data, error } = await supabase
         .from('client_invoices')
