@@ -146,7 +146,7 @@ app.delete('/plans/:id', async (req, res) => {
 });
 
 app.get('/get-plan-information', authenticateToken, async (req, res) => {
-  const { id: userId, companyId, role } = req.user;
+  const { userId, companyId, role } = req.user;
 
   let planId = null;
   let planTable = '';
