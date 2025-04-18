@@ -146,24 +146,49 @@ app.delete('/plans/:id', async (req, res) => {
 });
 
 app.get('/get-plan-information', authenticateToken, async (req, res) => {
-  const { companyId } = req.user;
+  const { id: userId, companyId, role } = req.user;
 
-  // Step 1: Fetch the company's plan_id
-  const { data: company, error: companyError } = await supabase
-    .from('companies')
-    .select('plan_id')
-    .eq('id', companyId)
-    .single();
+  let planId = null;
+  let planTable = '';
+  let planFields = '';
 
-  if (companyError || !company) {
-    return res.status(404).json({ error: 'Company not found or has no associated plan.' });
+  if (role === 'Client') {
+    // Get plan_id from clients table
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('plan_id')
+      .eq('id', userId)
+      .single();
+
+    if (clientError || !client) {
+      return res.status(404).json({ error: 'Client not found or has no associated plan.' });
+    }
+
+    planId = client.plan_id;
+    planTable = 'client_plans';
+    planFields = 'can_download, can_share, can_view_reports, can_view_activity_logs';
+  } else {
+    // Get plan_id from companies table
+    const { data: company, error: companyError } = await supabase
+      .from('companies')
+      .select('plan_id')
+      .eq('id', companyId)
+      .single();
+
+    if (companyError || !company) {
+      return res.status(404).json({ error: 'Company not found or has no associated plan.' });
+    }
+
+    planId = company.plan_id;
+    planTable = 'plans';
+    planFields = 'can_share_document, can_view_activity_logs, can_add_client, number_of_clients';
   }
 
-  // Step 2: Fetch the plan details
+  // Fetch the plan details
   const { data: plan, error: planError } = await supabase
-    .from('plans')
-    .select('can_share_document, can_view_activity_logs, can_add_client, number_of_clients')
-    .eq('id', company.plan_id)
+    .from(planTable)
+    .select(planFields)
+    .eq('id', planId)
     .single();
 
   if (planError || !plan) {
@@ -172,7 +197,6 @@ app.get('/get-plan-information', authenticateToken, async (req, res) => {
 
   res.status(200).json({ plan });
 });
-
 // -------------------------
 // 🏢 COMPANIES ENDPOINTS
 // -------------------------
