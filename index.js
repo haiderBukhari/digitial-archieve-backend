@@ -773,14 +773,14 @@ app.get('/document-history/:document_id', async (req, res) => {
 });
 
 app.post('/document-history', authenticateToken, verifyStructure(['document_id', 'edit_description']), async (req, res) => {
-  const { document_id, edit_description } = req.body;
+  const { document_id, edit_description, edit_details } = req.body;
   const edited_by = req.user.userId;
   const role = req.user.role;
 
   const { data, error } = await supabase
     .from('document_edit_history')
     .insert([
-      { document_id, edited_by, role, edit_description }
+      { document_id, edited_by, role, edit_description, edit_details }
     ])
     .select();
 
