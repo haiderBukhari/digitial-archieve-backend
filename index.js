@@ -1115,13 +1115,16 @@ app.post('/generate-invoices', async (req, res) => {
     }
 
     const monthly = parseFloat(plan.price_description) || 0;
+    const upload_count = parseFloat(plan.upload_count) || 0;
+    const download_count = parseFloat(plan.download_count) || 0;
+    const share_count = parseFloat(plan.share_count) || 0;
     const docShared = company.document_shared || 0;
     const docDownloaded = company.document_downloaded || 0;
     const docUploaded = company.document_uploaded || 0;
 
-    const shared_amount = parseFloat(((docShared / 1000) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
-    const download_amount = parseFloat(((docDownloaded / 1000) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
-    const upload_amount = parseFloat(((docUploaded / 10) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
+    const shared_amount = parseFloat(((docShared / share_count) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
+    const download_amount = parseFloat(((docDownloaded / download_count) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
+    const upload_amount = parseFloat(((docUploaded / upload_count) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
     // Insert invoice
@@ -1301,10 +1304,13 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
     const docShared = client.document_shared || 0;
     const docDownloaded = client.document_downloaded || 0;
     const docUploaded = client.document_uploaded || 0;
+    const upload_count = parseFloat(plan.upload_count) || 0;
+    const download_count = parseFloat(plan.download_count) || 0;
+    const share_count = parseFloat(plan.share_count) || 0;
 
-    const shared_amount = parseFloat(((docShared / 1000) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
-    const download_amount = parseFloat(((docDownloaded / 1000) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
-    const upload_amount = parseFloat(((docUploaded / 10) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
+    const shared_amount = parseFloat(((docShared / share_count) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
+    const download_amount = parseFloat(((docDownloaded / download_count) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
+    const upload_amount = parseFloat(((docUploaded / upload_count) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
 
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
