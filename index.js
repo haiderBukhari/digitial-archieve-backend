@@ -1533,7 +1533,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
         const { data: updateData, error: updateError } = await supabase
           .from('companies')
-          .update({ last_paid_invoice: new Date().toISOString() })
+          .update({ last_invoice_paid: new Date().toISOString() })
           .eq('id', companyid);
       }
 
@@ -1569,7 +1569,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
             const { data: updateClient, error: updateClientError } = await supabase
             .from('clients')
-            .update({ last_paid_invoice: new Date().toISOString() })
+            .update({ last_invoice_paid: new Date().toISOString() })
             .eq('id', userid);
           
           if (error) return res.status(400).json(error);
