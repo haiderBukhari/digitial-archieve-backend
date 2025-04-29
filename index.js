@@ -1487,6 +1487,8 @@ app.get('/invoices', authenticateToken, async (req, res) => {
 app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   const invoiceId = req.params.id;
   const role = req.user.role.toLowerCase();
+  const companyid = req.user.companyId;
+  const userid = req.user.userId;
 
   // 1️⃣ Try to fetch from invoices table first
   const { data: invoice, error: fetchError } = await supabase
@@ -1515,6 +1517,25 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
         .update({ invoice_submitted: true })
         .eq('id', invoiceId)
         .select();
+
+      if (data) {
+
+        const { data: companyData, error: companyError } = await supabase
+          .from('companies')
+          .select('*')
+          .eq('id', companyid)
+          .single();
+
+        if (companyError || !companyData) {
+          console.error("Failed to fetch company:", companyError);
+          return;
+        }
+
+        const { data: updateData, error: updateError } = await supabase
+          .from('companies')
+          .update({ last_paid_invoice: new Date().toISOString() })
+          .eq('id', companyid);
+      }
 
       if (!data) {
         const { data: clientInvoice, error: clientError } = await supabase
@@ -1545,12 +1566,17 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
             .update({ invoice_submitted: true })
             .eq('id', invoiceId)
             .select();
+
+            const { data: updateClient, error: updateClientError } = await supabase
+            .from('clients')
+            .update({ last_paid_invoice: new Date().toISOString() })
+            .eq('id', userid);
+          
           if (error) return res.status(400).json(error);
           return res.json({ role: role, message: 'Client invoice marked as submitted.', data });
         }
-
       }
-      
+
       if (error) return res.status(400).json(error);
       return res.json({ message: 'Invoice marked as submitted by company.', data });
     }
