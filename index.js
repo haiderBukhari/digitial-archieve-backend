@@ -1535,6 +1535,16 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
           .from('companies')
           .update({ last_invoice_paid: new Date().toISOString() })
           .eq('id', companyid);
+
+        const { error: companyUpdateError } = await supabase
+          .from('companies')
+          .update({
+            document_shared: 0,
+            document_downloaded: 0,
+            document_uploaded: 0
+          })
+          .eq('id', companyid);
+
       }
 
       if (!data) {
@@ -1567,11 +1577,20 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
             .eq('id', invoiceId)
             .select();
 
-            const { data: updateClient, error: updateClientError } = await supabase
+          const { data: updateClient, error: updateClientError } = await supabase
             .from('clients')
             .update({ last_invoice_paid: new Date().toISOString() })
             .eq('id', userid);
-          
+
+          const { error: resetDocsError } = await supabase
+            .from('clients')
+            .update({
+              document_shared: 0,
+              document_downloaded: 0,
+              document_uploaded: 0
+            })
+            .eq('id', userid);
+
           if (error) return res.status(400).json(error);
           return res.json({ role: role, message: 'Client invoice marked as submitted.', data });
         }
