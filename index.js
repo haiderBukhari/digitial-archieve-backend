@@ -1105,7 +1105,7 @@ app.post('/generate-invoices', async (req, res) => {
     // Get plan
     const { data: plan, error: planError } = await supabase
       .from('plans')
-      .select('price_description, download_price_per_thousand, share_price_per_thousand, upload_price_per_ten')
+      .select('price_description, download_price_per_thousand, share_price_per_thousand, upload_price_per_ten, upload_count, download_count, share_count')
       .eq('id', company.plan_id)
       .single();
 
@@ -1291,7 +1291,7 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
 
     const { data: plan, error: planError } = await supabase
       .from('client_plans')
-      .select('monthly_bill, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand')
+      .select('monthly_bill, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand, upload_count, download_count, share_count')
       .eq('id', client.plan_id)
       .single();
 
