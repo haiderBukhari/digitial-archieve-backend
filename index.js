@@ -495,6 +495,19 @@ app.get('/users', authenticateToken, async (req, res) => {
   res.json(data);
 });
 
+app.get('/current-users', authenticateToken, async (req, res) => {
+  const { companyId, userId } = req.user;
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('id', userId);
+
+  if (error) return res.status(400).json(error);
+  res.json(data);
+});
+
 app.post('/users', authenticateToken, verifyStructure(['name', 'email', 'phone', 'role', 'password']), async (req, res) => {
   const { name, email, phone, role, password } = req.body;
   const company_id = req.user.companyId;
