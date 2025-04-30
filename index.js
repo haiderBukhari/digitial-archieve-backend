@@ -1045,7 +1045,7 @@ app.put('/clients/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete client
-app.delete('/clients/:id', async (req, res) => {
+app.delete('/clients/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const companyId = req.user.companyId;
 
@@ -1054,6 +1054,8 @@ app.delete('/clients/:id', async (req, res) => {
     .delete()
     .eq('id', id)
     .eq('company_id', companyId);
+
+    console.log(error)
 
     if (error) return res.status(400).json(error);
   res.sendStatus(200);
