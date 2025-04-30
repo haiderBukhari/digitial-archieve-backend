@@ -2,6 +2,7 @@
 import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
+import { differenceInMonths, addMonths, differenceInDays } from 'date-fns';
 import { config } from 'dotenv';
 import jwt from 'jsonwebtoken'
 import cors from 'cors'
@@ -1103,13 +1104,15 @@ app.delete('/clients/:id', authenticateToken, async (req, res) => {
 //invoices
 
 app.post('/generate-invoices', async (req, res) => {
-  const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+  const currentDate = new Date();
+  const currentMonth = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
   const { data: companies, error: companyError } = await supabase
     .from('companies')
     .select(`
       id, name, contact_email, status, admin_name, plan_id,
-      document_shared, document_downloaded, document_uploaded
+      document_shared, document_downloaded, document_uploaded,
+      created_at, last_invoice_paid
     `)
     .eq('status', 'Active');
 
@@ -1118,7 +1121,31 @@ app.post('/generate-invoices', async (req, res) => {
   const results = [];
 
   for (const company of companies) {
-    // Check for existing invoice
+    // Check if it's time to generate an invoice
+    const lastPaid = company.last_invoice_paid ? new Date(company.last_invoice_paid) : new Date(company.created_at);
+
+    // Get plan to check billing duration
+    const { data: plan, error: planError } = await supabase
+      .from('plans')
+      .select('price_description, billing_duration, download_price_per_thousand, share_price_per_thousand, upload_price_per_ten, upload_count, download_count, share_count')
+      .eq('id', company.plan_id)
+      .single();
+
+    if (planError || !plan) {
+      results.push({ company: company.name, status: 'Failed to fetch plan info' });
+      continue;
+    }
+
+    const durationMonths = plan.billing_duration || 1;
+    const nextBillingDate = addMonths(lastPaid, durationMonths);
+    const daysUntilNextBilling = differenceInDays(nextBillingDate, currentDate);
+
+    if (daysUntilNextBilling > 5) {
+      results.push({ company: company.name, status: `Invoice not due yet (due in ${daysUntilNextBilling} days)` });
+      continue;
+    }
+
+    // Check for existing invoice for this month
     const { data: existingInvoice } = await supabase
       .from('invoices')
       .select('id')
@@ -1131,18 +1158,7 @@ app.post('/generate-invoices', async (req, res) => {
       continue;
     }
 
-    // Get plan
-    const { data: plan, error: planError } = await supabase
-      .from('plans')
-      .select('price_description, download_price_per_thousand, share_price_per_thousand, upload_price_per_ten, upload_count, download_count, share_count')
-      .eq('id', company.plan_id)
-      .single();
-
-    if (planError || !plan) {
-      results.push({ company: company.name, status: 'Failed to fetch plan info' });
-      continue;
-    }
-
+    // Calculate charges
     const monthly = parseFloat(plan.price_description) || 0;
     const upload_count = parseFloat(plan.upload_count) || 0;
     const download_count = parseFloat(plan.download_count) || 0;
@@ -1157,7 +1173,7 @@ app.post('/generate-invoices', async (req, res) => {
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
     // Insert invoice
-    const { data: invoice, error: insertError } = await supabase
+    const { error: insertError } = await supabase
       .from('invoices')
       .insert([{
         company_id: company.id,
@@ -1174,8 +1190,7 @@ app.post('/generate-invoices', async (req, res) => {
         document_uploaded: docUploaded,
         upload_amount,
         invoice_submitted: false
-      }])
-      .select();
+      }]);
 
     if (insertError) {
       results.push({ company: company.name, status: 'Failed to create invoice' });
@@ -1286,15 +1301,17 @@ app.post('/remind-invoices', async (req, res) => {
   res.status(200).json(results);
 });
 
+const { addMonths, differenceInDays } = require('date-fns');
+
 app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
   const companyName = req.user.name || 'Company';
-  const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+  const currentDate = new Date();
+  const currentMonth = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-  // Get all clients of the company
   const { data: clients, error: clientError } = await supabase
     .from('clients')
-    .select('id, name, email, document_shared, document_downloaded, document_uploaded, plan_id')
+    .select('id, name, email, document_shared, document_downloaded, document_uploaded, plan_id, created_at, last_invoice_paid')
     .eq('company_id', companyId);
 
   if (clientError) return res.status(400).json({ error: 'Failed to fetch clients' });
@@ -1302,6 +1319,28 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
   const results = [];
 
   for (const client of clients) {
+    const { data: plan, error: planError } = await supabase
+      .from('client_plans')
+      .select('monthly_bill, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand, upload_count, download_count, share_count, billing_duration')
+      .eq('id', client.plan_id)
+      .single();
+
+    if (planError || !plan) {
+      results.push({ client: client.name, status: 'Failed to fetch plan info' });
+      continue;
+    }
+
+    const billingDuration = plan.billing_duration || 1;
+    const lastPaidDate = client.last_invoice_paid ? new Date(client.last_invoice_paid) : new Date(client.created_at);
+    const nextBillingDate = addMonths(lastPaidDate, billingDuration);
+    const daysUntilDue = differenceInDays(nextBillingDate, currentDate);
+
+    if (daysUntilDue > 5) {
+      results.push({ client: client.name, status: `Invoice not due yet (due in ${daysUntilDue} days)` });
+      continue;
+    }
+
+    // Avoid duplicate invoice for this month
     const { data: existing } = await supabase
       .from('client_invoices')
       .select('id')
@@ -1315,31 +1354,19 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
       continue;
     }
 
-    const { data: plan, error: planError } = await supabase
-      .from('client_plans')
-      .select('monthly_bill, upload_price_per_ten, share_price_per_thousand, download_price_per_thousand, upload_count, download_count, share_count')
-      .eq('id', client.plan_id)
-      .single();
-
-    if (planError || !plan) {
-      results.push({ client: client.name, status: 'Failed to fetch plan info' });
-      continue;
-    }
-
     const monthly = parseFloat(plan.monthly_bill) || 0;
     const docShared = client.document_shared || 0;
     const docDownloaded = client.document_downloaded || 0;
     const docUploaded = client.document_uploaded || 0;
-    const upload_count = parseFloat(plan.upload_count) || 0;
-    const download_count = parseFloat(plan.download_count) || 0;
-    const share_count = parseFloat(plan.share_count) || 0;
+    const upload_count = parseFloat(plan.upload_count) || 1;
+    const download_count = parseFloat(plan.download_count) || 1;
+    const share_count = parseFloat(plan.share_count) || 1;
 
     const shared_amount = parseFloat(((docShared / share_count) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
     const download_amount = parseFloat(((docDownloaded / download_count) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
     const upload_amount = parseFloat(((docUploaded / upload_count) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
-    // Insert invoice
     const { error: insertError } = await supabase
       .from('client_invoices')
       .insert([{
@@ -1361,10 +1388,9 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
 
     if (insertError) {
       results.push({ client: client.name, status: 'Failed to create invoice' });
-      continue;
+    } else {
+      results.push({ client: client.name, status: 'Invoice created' });
     }
-
-    results.push({ client: client.name, status: 'Invoice created' });
   }
 
   res.json({ results });
