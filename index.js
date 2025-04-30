@@ -1807,7 +1807,7 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
   }
 
   res.status(200).json({
-    document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.document_id}`
+    document_link: `https://archiveinnovators.vercel.app/pdf-view/${data.id}`
   });
 });
 
