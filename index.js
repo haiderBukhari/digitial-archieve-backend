@@ -509,7 +509,7 @@ app.get('/current-users', authenticateToken, async (req, res) => {
 });
 
 app.post('/users', authenticateToken, verifyStructure(['name', 'email', 'phone', 'role', 'password']), async (req, res) => {
-  const { name, email, phone, role, password } = req.body;
+  const { name, email, phone, role, password, allow_to_publish, create_dispute } = req.body;
   const company_id = req.user.companyId;
 
   const { data, error } = await supabase.from('users').insert([{
@@ -518,6 +518,8 @@ app.post('/users', authenticateToken, verifyStructure(['name', 'email', 'phone',
     phone,
     role,
     password,
+    allow_to_publish,
+    create_dispute,
     company_id,
     documents_reviewed: 0,
     status: 'active'
