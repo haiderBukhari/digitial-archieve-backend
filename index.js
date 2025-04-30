@@ -1101,10 +1101,23 @@ app.delete('/clients/:id', authenticateToken, async (req, res) => {
 
 //invoices
 
+const addMonths = (date, months) => {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+};
+
+const differenceInDays = (a, b) => {
+  const diffTime = a.getTime() - b.getTime();
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+};
+
+
 app.post('/generate-invoices', async (req, res) => {
   const currentDate = new Date();
   const currentMonth = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
+  // Fetch all active companies
   const { data: companies, error: companyError } = await supabase
     .from('companies')
     .select(`
@@ -1116,51 +1129,51 @@ app.post('/generate-invoices', async (req, res) => {
 
   if (companyError) return res.status(400).json({ error: 'Failed to fetch companies' });
 
+  // Fetch all plans once
+  const { data: allPlans, error: planFetchError } = await supabase
+    .from('plans')
+    .select('*');
+
+  if (planFetchError) return res.status(400).json({ error: 'Failed to fetch plans' });
+
+  // Fetch all invoices for this month
+  const { data: existingInvoices, error: invoiceFetchError } = await supabase
+    .from('invoices')
+    .select('company_id')
+    .eq('invoice_month', currentMonth);
+
+  if (invoiceFetchError) return res.status(400).json({ error: 'Failed to fetch existing invoices' });
+
   const results = [];
 
   for (const company of companies) {
-    // Check if it's time to generate an invoice
-    const lastPaid = company.last_invoice_paid ? new Date(company.last_invoice_paid) : new Date(company.created_at);
-
-    // Get plan to check billing duration
-    const { data: plan, error: planError } = await supabase
-      .from('plans')
-      .select('price_description, billing_duration, download_price_per_thousand, share_price_per_thousand, upload_price_per_ten, upload_count, download_count, share_count')
-      .eq('id', company.plan_id)
-      .single();
-
-    if (planError || !plan) {
-      results.push({ company: company.name, status: 'Failed to fetch plan info' });
-      continue;
-    }
-
-    const durationMonths = plan.billing_duration || 1;
-    const nextBillingDate = addMonths(lastPaid, durationMonths);
-    const daysUntilNextBilling = differenceInDays(nextBillingDate, currentDate);
-
-    if (daysUntilNextBilling > 5) {
-      results.push({ company: company.name, status: `Invoice not due yet (due in ${daysUntilNextBilling} days)` });
-      continue;
-    }
-
-    // Check for existing invoice for this month
-    const { data: existingInvoice } = await supabase
-      .from('invoices')
-      .select('id')
-      .eq('company_id', company.id)
-      .eq('invoice_month', currentMonth)
-      .single();
-
-    if (existingInvoice) {
+    const alreadyInvoiced = existingInvoices.some(inv => inv.company_id === company.id);
+    if (alreadyInvoiced) {
       results.push({ company: company.name, status: 'Invoice already exists' });
       continue;
     }
 
-    // Calculate charges
+    const plan = allPlans.find(p => p.id === company.plan_id);
+    if (!plan) {
+      results.push({ company: company.name, status: 'Plan not found' });
+      continue;
+    }
+
+    const lastPaid = new Date(company.last_invoice_paid || company.created_at);
+    const nextBillingDate = addMonths(lastPaid, plan.billing_duration || 1);
+    const daysUntilDue = differenceInDays(nextBillingDate, currentDate);
+
+    if (daysUntilDue > 5) {
+      results.push({ company: company.name, status: `Invoice not due yet (due in ${daysUntilDue} days)` });
+      continue;
+    }
+
+    // Calculate invoice
     const monthly = parseFloat(plan.price_description) || 0;
-    const upload_count = parseFloat(plan.upload_count) || 0;
-    const download_count = parseFloat(plan.download_count) || 0;
-    const share_count = parseFloat(plan.share_count) || 0;
+    const upload_count = parseFloat(plan.upload_count) || 1;
+    const download_count = parseFloat(plan.download_count) || 1;
+    const share_count = parseFloat(plan.share_count) || 1;
+
     const docShared = company.document_shared || 0;
     const docDownloaded = company.document_downloaded || 0;
     const docUploaded = company.document_uploaded || 0;
@@ -1168,9 +1181,9 @@ app.post('/generate-invoices', async (req, res) => {
     const shared_amount = parseFloat(((docShared / share_count) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
     const download_amount = parseFloat(((docDownloaded / download_count) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
     const upload_amount = parseFloat(((docUploaded / upload_count) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
+
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
-    // Insert invoice
     const { error: insertError } = await supabase
       .from('invoices')
       .insert([{
@@ -1178,7 +1191,6 @@ app.post('/generate-invoices', async (req, res) => {
         company_name: company.name,
         email: company.contact_email,
         invoice_month: currentMonth,
-        owner_name: company.admin_name || 'Owner',
         invoice_value: total,
         monthly,
         document_shared: docShared,
@@ -1192,10 +1204,9 @@ app.post('/generate-invoices', async (req, res) => {
 
     if (insertError) {
       results.push({ company: company.name, status: 'Failed to create invoice' });
-      continue;
+    } else {
+      results.push({ company: company.name, status: 'Invoice created' });
     }
-
-    results.push({ company: company.name, status: 'Invoice created' });
   }
 
   res.json({ results });
