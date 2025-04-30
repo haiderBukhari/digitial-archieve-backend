@@ -56,7 +56,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     .single();
 
   if (!user || error) {
-    // Try login as client
+
     const { data: client, error: clientError } = await supabase
       .from('clients')
       .select('id, email, password, company_id, name, status')
@@ -64,7 +64,6 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
       .single();
 
     if (client && client.password === password) {
-      // Check if company is active
       const { data: company, error: companyError } = await supabase
         .from('companies')
         .select('status')
@@ -75,8 +74,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
         return res.status(403).json({ error: 'Company is not active. Please contact support.' });
       }
 
-      // Check if client is active
-      if (client.status !== 'Active') {
+      if (client.status !== 'active') {
         return res.status(403).json({ error: 'Your account is not active. Please contact your company admin.' });
       }
 
