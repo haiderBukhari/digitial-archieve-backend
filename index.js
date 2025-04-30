@@ -1148,6 +1148,51 @@ app.post('/generate-invoices', async (req, res) => {
   res.json({ results });
 });
 
+app.put('/invoices/:id/other-invoices', async (req, res) => {
+  const { id } = req.params;
+  const { other_invoices = [] } = req.body;
+
+  try {
+    // Fetch existing invoice
+    const { data: invoice, error: fetchError } = await supabase
+      .from('invoices')
+      .select('invoice_value, other_invoices')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !invoice) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const oldOtherInvoices = invoice.other_invoices || [];
+    const oldSum = oldOtherInvoices.reduce((sum, item) => sum + parseFloat(item.ammount || 0), 0);
+    const newSum = other_invoices.reduce((sum, item) => sum + parseFloat(item.ammount || 0), 0);
+
+    const updatedInvoiceValue = parseFloat((invoice.invoice_value - oldSum + newSum).toFixed(4));
+
+    // Update the invoice
+    const { error: updateError } = await supabase
+      .from('invoices')
+      .update({
+        other_invoices,
+        invoice_value: updatedInvoiceValue
+      })
+      .eq('id', id);
+
+    if (updateError) {
+      return res.status(500).json({ error: 'Failed to update invoice' });
+    }
+
+    res.status(200).json({
+      message: 'Invoice updated successfully',
+      updated_invoice_value: updatedInvoiceValue
+    });
+  } catch (err) {
+    console.error("Error in updating other_invoices:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 app.post('/remind-invoices', async (req, res) => {
   const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
 
