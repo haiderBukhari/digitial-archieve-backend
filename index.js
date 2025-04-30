@@ -56,15 +56,32 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     .single();
 
   if (!user || error) {
-    const clientResult = await supabase
+    // Try login as client
+    const { data: client, error: clientError } = await supabase
       .from('clients')
-      .select('id, email, password, company_id, name')
+      .select('id, email, password, company_id, name, status')
       .eq('email', email)
       .single();
 
-    if (clientResult.data && clientResult.data.password === password) {
+    if (client && client.password === password) {
+      // Check if company is active
+      const { data: company, error: companyError } = await supabase
+        .from('companies')
+        .select('status')
+        .eq('id', client.company_id)
+        .single();
+
+      if (companyError || !company || company.status !== 'Active') {
+        return res.status(403).json({ error: 'Company is not active. Please contact support.' });
+      }
+
+      // Check if client is active
+      if (client.status !== 'Active') {
+        return res.status(403).json({ error: 'Your account is not active. Please contact your company admin.' });
+      }
+
       user = {
-        ...clientResult.data,
+        ...client,
         role: 'Client'
       };
     } else {
@@ -72,8 +89,20 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     }
   } else if (user.password !== password) {
     return res.status(401).json({ error: 'Invalid email or password.' });
+  } else {
+    // Check if company is active for regular users
+    const { data: company, error: companyError } = await supabase
+      .from('companies')
+      .select('status')
+      .eq('id', user.company_id)
+      .single();
+
+    if (companyError || !company || company.status !== 'Active') {
+      return res.status(403).json({ error: 'Company is not active. Please contact support.' });
+    }
   }
 
+  // Generate token
   const token = jwt.sign(
     {
       userId: user.id,
