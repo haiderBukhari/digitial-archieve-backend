@@ -1075,17 +1075,6 @@ app.post('/generate-invoices', async (req, res) => {
 
   if (companyError) return res.status(400).json({ error: 'Failed to fetch companies' });
 
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      type: 'OAuth2',
-      user: process.env.EMAIL_HOST,
-      clientId: process.env.CLIENT_ID,
-      clientSecret: process.env.CLIENT_SECRET,
-      refreshToken: process.env.OAUTH_REFRESH_TOKEN,
-    },
-  });
-
   const results = [];
 
   for (const company of companies) {
@@ -1153,45 +1142,10 @@ app.post('/generate-invoices', async (req, res) => {
       continue;
     }
 
-    // 📧 Send invoice email
-    try {
-      await transporter.sendMail({
-        from: process.env.EMAIL_HOST,
-        to: company.contact_email,
-        subject: `Invoice - ${company.name} - ${currentMonth}`,
-        html: `
-          <div style="font-family: Arial;">
-            <h2>Hello ${company.name},</h2>
-            <p>Here is your invoice for <strong>${currentMonth}</strong>:</p>
-            <ul>
-              <li><strong>Base Plan:</strong> $${monthly.toFixed(2)}</li>
-              <li><strong>Documents Uploaded:</strong> ${docUploaded} ($${upload_amount.toFixed(2)})</li>
-              <li><strong>Documents Shared:</strong> ${docShared} ($${shared_amount.toFixed(2)})</li>
-              <li><strong>Documents Downloaded:</strong> ${docDownloaded} ($${download_amount.toFixed(2)})</li>
-              <li><strong><b>Total:</b></strong> $${total.toFixed(2)}</li>
-            </ul>
-            <p>Thanks,<br/>Talo Innovations</p>
-          </div>
-        `
-      });
-
-      // Reset counters
-      await supabase
-        .from('companies')
-        .update({
-          document_shared: 0,
-          document_uploaded: 0,
-          document_downloaded: 0
-        })
-        .eq('id', company.id);
-
-      results.push({ company: company.name, status: 'Invoice created and emailed' });
-    } catch (err) {
-      results.push({ company: company.name, status: 'Email failed', error: err.message });
-    }
+    results.push({ company: company.name, status: 'Invoice created' });
   }
 
-  res.status(200).json(results);
+  res.json({ results });
 });
 
 app.post('/remind-invoices', async (req, res) => {
@@ -1247,7 +1201,6 @@ app.post('/remind-invoices', async (req, res) => {
   res.status(200).json(results);
 });
 
-
 app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
   const companyName = req.user.name || 'Company';
@@ -1260,18 +1213,6 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
     .eq('company_id', companyId);
 
   if (clientError) return res.status(400).json({ error: 'Failed to fetch clients' });
-
-  // Email transporter setup
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      type: 'OAuth2',
-      user: process.env.EMAIL_HOST,
-      clientId: process.env.CLIENT_ID,
-      clientSecret: process.env.CLIENT_SECRET,
-      refreshToken: process.env.OAUTH_REFRESH_TOKEN,
-    },
-  });
 
   const results = [];
 
@@ -1311,7 +1252,6 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
     const shared_amount = parseFloat(((docShared / share_count) * parseFloat(plan.share_price_per_thousand || 0)).toFixed(4));
     const download_amount = parseFloat(((docDownloaded / download_count) * parseFloat(plan.download_price_per_thousand || 0)).toFixed(4));
     const upload_amount = parseFloat(((docUploaded / upload_count) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
-
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
     // Insert invoice
@@ -1339,45 +1279,10 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
       continue;
     }
 
-    // Email invoice to client
-    try {
-      await transporter.sendMail({
-        from: process.env.EMAIL_HOST,
-        to: client.email,
-        subject: `Invoice - ${client.name} - ${currentMonth}`,
-        html: `
-          <div style="font-family: Arial;">
-            <h2>Hello ${client.name},</h2>
-            <p>Here is your invoice for <strong>${currentMonth}</strong>:</p>
-            <ul>
-              <li><strong>Base Plan:</strong> $${monthly.toFixed(2)}</li>
-              <li><strong>Documents Uploaded:</strong> ${docUploaded} ($${upload_amount.toFixed(2)})</li>
-              <li><strong>Documents Shared:</strong> ${docShared} ($${shared_amount.toFixed(2)})</li>
-              <li><strong>Documents Downloaded:</strong> ${docDownloaded} ($${download_amount.toFixed(2)})</li>
-              <li><strong><b>Total:</b></strong> $${total.toFixed(2)}</li>
-            </ul>
-            <p>Thanks,<br/>Talo Innovations</p>
-          </div>
-        `
-      });
-
-      // Reset client usage counters
-      await supabase
-        .from('clients')
-        .update({
-          document_shared: 0,
-          document_downloaded: 0,
-          document_uploaded: 0
-        })
-        .eq('id', client.id);
-
-      results.push({ client: client.name, status: 'Invoice created and emailed' });
-    } catch (err) {
-      results.push({ client: client.name, status: 'Email failed', error: err.message });
-    }
+    results.push({ client: client.name, status: 'Invoice created' });
   }
 
-  res.status(200).json(results);
+  res.json({ results });
 });
 
 app.post('/remind-unpaid-client-invoices', authenticateToken, async (req, res) => {
