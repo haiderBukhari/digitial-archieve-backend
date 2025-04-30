@@ -1055,9 +1055,9 @@ app.delete('/clients/:id', authenticateToken, async (req, res) => {
     .eq('id', id)
     .eq('company_id', companyId);
 
-    console.log(error)
+  console.log(error)
 
-    if (error) return res.status(400).json(error);
+  if (error) return res.status(400).json(error);
   res.sendStatus(200);
 });
 
@@ -1504,7 +1504,6 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   const companyid = req.user.companyId;
   const userid = req.user.userId;
 
-  // 1️⃣ Try to fetch from invoices table first
   const { data: invoice, error: fetchError } = await supabase
     .from('invoices')
     .select('id, invoice_submitted')
@@ -1512,7 +1511,6 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
     .single();
 
   if (invoice) {
-    // 👉 If invoice found in invoices table
     if (role === 'admin') {
       if (invoice.invoice_submitted === true) {
         const { data, error } = await supabase
@@ -1531,9 +1529,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
         .update({ invoice_submitted: true })
         .eq('id', invoiceId)
         .select();
-
       if (data) {
-
         const { data: companyData, error: companyError } = await supabase
           .from('companies')
           .select('*')
@@ -1615,7 +1611,6 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
     }
   }
 
-  // 2️⃣ Not found in invoices → check client_invoices table
   const { data: clientInvoice, error: clientError } = await supabase
     .from('client_invoices')
     .select('id, invoice_submitted')
@@ -1626,7 +1621,6 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
     return res.status(404).json({ error: 'Invoice not found in either table.' });
   }
 
-  // 👉 Handle submission for client invoice
   if (role === 'owner') {
     if (clientInvoice.invoice_submitted === true) {
       const { data, error } = await supabase
@@ -1645,6 +1639,22 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
       .update({ invoice_submitted: true })
       .eq('id', invoiceId)
       .select();
+
+    const { data: updateClient, error: updateClientError } = await supabase
+      .from('clients')
+      .update({ last_invoice_paid: new Date().toISOString() })
+      .eq('id', userid);
+
+    const { error: resetDocsError } = await supabase
+      .from('clients')
+      .update({
+        document_shared: 0,
+        document_downloaded: 0,
+        document_uploaded: 0
+      })
+      .eq('id', userid);
+
+
     if (error) return res.status(400).json(error);
     return res.json({ message: 'Client invoice marked as submitted.', data });
   }
