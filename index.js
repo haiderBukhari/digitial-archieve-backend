@@ -1332,6 +1332,68 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
   res.json({ results });
 });
 
+app.put('/client-invoices/:id/other-invoices', authenticateToken, async (req, res) => {
+  const invoiceId = req.params.id;
+  const { other_invoices } = req.body;
+
+  if (!Array.isArray(other_invoices)) {
+    return res.status(400).json({ error: 'other_invoices must be an array' });
+  }
+
+  // Calculate sum of new other_invoices
+  const newOtherTotal = other_invoices.reduce((sum, item) => {
+    return sum + (parseFloat(item.ammount) || 0);
+  }, 0);
+
+  try {
+    // Fetch the existing invoice
+    const { data: existingInvoice, error: fetchError } = await supabase
+      .from('client_invoices')
+      .select('invoice_value, other_invoices')
+      .eq('id', invoiceId)
+      .single();
+
+    if (fetchError || !existingInvoice) {
+      return res.status(404).json({ error: 'Client invoice not found' });
+    }
+
+    const oldOtherInvoices = Array.isArray(existingInvoice.other_invoices)
+      ? existingInvoice.other_invoices
+      : [];
+
+    // Calculate old other invoices total
+    const oldOtherTotal = oldOtherInvoices.reduce((sum, item) => {
+      return sum + (parseFloat(item.ammount) || 0);
+    }, 0);
+
+    // Update invoice_value
+    const updatedInvoiceValue =
+      parseFloat(existingInvoice.invoice_value || 0) - oldOtherTotal + newOtherTotal;
+
+    // Update in DB
+    const { error: updateError } = await supabase
+      .from('client_invoices')
+      .update({
+        other_invoices,
+        invoice_value: parseFloat(updatedInvoiceValue.toFixed(4))
+      })
+      .eq('id', invoiceId);
+
+    if (updateError) {
+      return res.status(500).json({ error: 'Failed to update client invoice' });
+    }
+
+    res.status(200).json({
+      message: 'Client invoice updated successfully',
+      updated_invoice_value: parseFloat(updatedInvoiceValue.toFixed(4))
+    });
+
+  } catch (err) {
+    console.error('Unexpected error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.post('/remind-unpaid-client-invoices', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
   const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
