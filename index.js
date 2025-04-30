@@ -1198,7 +1198,8 @@ app.post('/generate-invoices', async (req, res) => {
         download_amount,
         document_uploaded: docUploaded,
         upload_amount,
-        invoice_submitted: false
+        invoice_submitted: false,
+        owner_name: company.admin_name
       }]);
 
     if (insertError) {
@@ -1341,7 +1342,9 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
     const nextBillingDate = addMonths(lastPaidDate, billingDuration);
     const daysUntilDue = differenceInDays(nextBillingDate, currentDate);
 
-    if (daysUntilDue > 5) {
+    // If the invoice is due today or in the past (you can adjust this threshold as needed)
+    const daysBeforeDue = 5; // Invoices due in the next X days will be processed
+    if (daysUntilDue > daysBeforeDue) {
       results.push({ client: client.name, status: `Invoice not due yet (due in ${daysUntilDue} days)` });
       continue;
     }
