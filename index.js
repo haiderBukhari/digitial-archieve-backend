@@ -1055,8 +1055,8 @@ app.delete('/clients/:id', async (req, res) => {
     .eq('id', id)
     .eq('company_id', companyId);
 
-  if (error) return res.status(400).json(error);
-  res.sendStatus(204);
+    if (error) return res.status(400).json(error);
+  res.sendStatus(200);
 });
 
 
