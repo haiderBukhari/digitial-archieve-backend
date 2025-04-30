@@ -56,8 +56,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     .eq('email', email)
     .single();
 
-  if (!user || error) {
-
+  if (!user) {
     const { data: client, error: clientError } = await supabase
       .from('clients')
       .select('id, email, password, company_id, name, status')
@@ -1300,8 +1299,6 @@ app.post('/remind-invoices', async (req, res) => {
 
   res.status(200).json(results);
 });
-
-const { addMonths, differenceInDays } = require('date-fns');
 
 app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
