@@ -945,10 +945,6 @@ app.post('/publish', authenticateToken, verifyStructure(['document_id']), async 
   const { document_id } = req.body;
   const { companyId, role } = req.user;
 
-  if (role.toLowerCase() !== 'qa') {
-    return res.status(403).json({ error: 'Only QA role can publish documents.' });
-  }
-
   const { data, error } = await supabase
     .from('documents')
     .update({ progress_number: 3, is_published: true })
