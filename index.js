@@ -1769,7 +1769,7 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
 
   const { data, error } = await supabase
     .from('shareddoc')
-    .select('document_id')
+    .select('id')
     .eq('document_id', document_id)
     .single();
 
