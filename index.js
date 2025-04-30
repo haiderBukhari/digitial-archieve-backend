@@ -56,7 +56,8 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     .eq('email', email)
     .single();
 
-  if (!user) {
+  if (!user || error) {
+    // Check in clients table if not found in users
     const { data: client, error: clientError } = await supabase
       .from('clients')
       .select('id, email, password, company_id, name, status')
@@ -64,6 +65,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
       .single();
 
     if (client && client.password === password) {
+      // Check if company is active
       const { data: company, error: companyError } = await supabase
         .from('companies')
         .select('status')
@@ -75,7 +77,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
       }
 
       if (client.status !== 'active') {
-        return res.status(403).json({ error: 'Your account is not active. Please contact your company admin.' });
+        return res.status(403).json({ error: 'Your client account is not active. Contact your company admin.' });
       }
 
       user = {
@@ -85,10 +87,18 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     } else {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
-  } else if (user.password !== password) {
-    return res.status(401).json({ error: 'Invalid email or password.' });
+
   } else {
-    // Check if company is active for regular users
+    // User exists but not an Admin
+    if (user.role !== 'Admin') {
+      return res.status(403).json({ error: 'Only Admin users are allowed to login here.' });
+    }
+
+    if (user.password !== password) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Check if company is active
     const { data: company, error: companyError } = await supabase
       .from('companies')
       .select('status')
@@ -100,7 +110,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     }
   }
 
-  // Generate token
+  // JWT token generation
   const token = jwt.sign(
     {
       userId: user.id,
