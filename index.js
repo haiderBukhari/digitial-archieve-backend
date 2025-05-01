@@ -2360,4 +2360,90 @@ app.get('/invoice-preview', authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/custom-invoice', authenticateToken, async (req, res) => {
+  const { companyId } = req.user;
+  const {
+    is_client,
+    date,
+    payment_term,
+    due_date,
+    company_name,
+    client_name,
+    bill_to,
+    quantities,
+    subtotal,
+    discount_percent,
+    tax_percent,
+    total,
+    notes
+  } = req.body;
+
+  const { data, error } = await supabase
+    .from('custom_invoices')
+    .insert([{
+      company_id: companyId,
+      is_client,
+      date,
+      payment_term,
+      due_date,
+      company_name,
+      client_name,
+      bill_to,
+      quantities,
+      subtotal,
+      discount_percent,
+      tax_percent,
+      total,
+      notes
+    }])
+    .select();
+
+  if (error) return res.status(400).json({ error });
+  res.status(201).json(data[0]);
+});
+
+app.put('/custom-invoice/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId } = req.user;
+  const updates = req.body;
+
+  const { data, error } = await supabase
+    .from('custom_invoices')
+    .update(updates)
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (error) return res.status(400).json({ error });
+  res.json(data[0]);
+});
+
+app.get('/custom-invoices', authenticateToken, async (req, res) => {
+  const { companyId } = req.user;
+
+  const { data, error } = await supabase
+    .from('custom_invoices')
+    .select('*')
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false });
+
+  if (error) return res.status(400).json({ error });
+  res.json(data);
+});
+
+app.get('/custom-invoice/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId } = req.user;
+
+  const { data, error } = await supabase
+    .from('custom_invoices')
+    .select('*')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single();
+
+  if (error) return res.status(400).json({ error });
+  res.json(data);
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
