@@ -2421,6 +2421,7 @@ app.get('/invoice-preview', authenticateToken, async (req, res) => {
 
 app.post('/custom-invoice', authenticateToken, async (req, res) => {
   const role = req.user.role.toLowerCase();
+  const companyId = req.user.companyId.toLowerCase();
   const {
     company_id,
     date,
@@ -2438,10 +2439,9 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
     notes
   } = req.body;
 
-  // Check if the role is admin
   let admin_name = null;
+
   if (role === "admin") {
-    // Fetch the admin_name from the companies table
     const { data: companyData, error: companyError } = await supabase
       .from('companies')
       .select('admin_name')
@@ -2459,7 +2459,7 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
   const { data, error } = await supabase
     .from('custom_invoices')
     .insert([{
-      company_id: company_id,
+      company_id: role === "admin" ? company_id : companyId,
       is_client: role === "admin" ? false : true,
       date,
       user_id,
