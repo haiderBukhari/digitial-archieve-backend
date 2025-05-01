@@ -1523,15 +1523,46 @@ app.post('/remind-unpaid-client-invoices', authenticateToken, async (req, res) =
 app.get('/client-invoices', authenticateToken, async (req, res) => {
   const { companyId } = req.user;
 
-  const { data: invoices, error } = await supabase
-    .from('client_invoices')
-    .select('*')
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false });
+  try {
+    const [standardRes, customRes] = await Promise.all([
+      supabase
+        .from('client_invoices')
+        .select('*')
+        .eq('company_id', companyId),
 
-  if (error) return res.status(400).json({ error: 'Failed to fetch client invoices' });
+      supabase
+        .from('custom_invoices')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('is_client', true)
+    ]);
 
-  res.status(200).json(invoices);
+    if (standardRes.error || customRes.error) {
+      return res.status(400).json({
+        error: standardRes.error?.message || customRes.error?.message || 'Failed to fetch invoices'
+      });
+    }
+
+    const standardInvoices = (standardRes.data || []).map(inv => ({
+      ...inv,
+      type: 'standard',
+      invoice_month: inv.invoice_month || 'Unknown',
+    }));
+
+    const customInvoices = (customRes.data || []).map(inv => ({
+      ...inv,
+      type: 'custom',
+      invoice_month: 'Custom Invoice',
+    }));
+
+    const combined = [...standardInvoices, ...customInvoices].sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    );
+
+    res.status(200).json(combined);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 app.get('/invoices', authenticateToken, async (req, res) => {
@@ -1546,22 +1577,48 @@ app.get('/invoices', authenticateToken, async (req, res) => {
         .select('email')
         .eq('id', userId)
         .single();
-
+    
       if (clientError || !client) {
         return res.status(404).json({ error: 'Client not found' });
       }
+    
+      const [clientInvoices, customClientInvoices] = await Promise.all([
+        supabase
+          .from('client_invoices')
+          .select('*')
+          .eq('email', client.email),
+        supabase
+          .from('custom_invoices')
+          .select('*')
+          .eq('is_client', true)
+          .eq('user_id', userId)
+      ]);
+    
+      if (clientInvoices.error || customClientInvoices.error) {
+        return res.status(400).json({
+          error: clientInvoices.error?.message || customClientInvoices.error?.message
+        });
+      }
+    
+      const standard = (clientInvoices.data || []).map(inv => ({
+        ...inv,
+        type: 'standard',
+        invoice_month: inv.invoice_month || 'Unknown',
+      }));
+    
+      const custom = (customClientInvoices.data || []).map(inv => ({
+        ...inv,
+        type: 'custom',
+        invoice_month: 'Custom Invoice',
+      }));
+    
+      const combined = [...standard, ...custom].sort((a, b) => {
+        return Date.parse(b.created_at) - Date.parse(a.created_at);
+      });
+    
+      return res.json(combined);
+    }    
 
-      const { data: clientInvoices, error: invoiceError } = await supabase
-        .from('client_invoices')
-        .select('*')
-        .eq('email', client.email)
-        .order('created_at', { ascending: true });
-
-      if (invoiceError) return res.status(400).json(invoiceError);
-      return res.json(clientInvoices);
-    }
-
-    // 📍 For OWNER (uses companyId)
     if (roleLower === 'owner') {
       if (!companyId) {
         return res.status(400).json({ error: 'Missing company ID for owner' });
@@ -1569,7 +1626,7 @@ app.get('/invoices', authenticateToken, async (req, res) => {
 
       const [standardInvoices, customInvoices] = await Promise.all([
         supabase.from('invoices').select('*').eq('company_id', companyId),
-        supabase.from('custom_invoices').select('*').eq('company_id', companyId)
+        supabase.from('custom_invoices').select('*').eq('company_id', companyId).eq('is_client', false)
       ]);
 
       if (standardInvoices.error || customInvoices.error) {
@@ -1592,11 +1649,10 @@ app.get('/invoices', authenticateToken, async (req, res) => {
       return res.json(combined);
     }
 
-    // 📍 For ADMIN (get ALL invoices, no filter)
     if (roleLower === 'admin') {
       const [standardInvoices, customInvoices] = await Promise.all([
         supabase.from('invoices').select('*'),
-        supabase.from('custom_invoices').select('*')
+        supabase.from('custom_invoices').select('*').eq('is_client', false)
       ]);
 
       if (standardInvoices.error || customInvoices.error) {
@@ -1633,10 +1689,10 @@ app.get('/invoices', authenticateToken, async (req, res) => {
 app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   const invoiceId = req.params.id;
   const role = req.user.role.toLowerCase();
-  const companyid = req.user.companyId;
-  const userid = req.user.userId;
+  const companyId = req.user.companyId;
 
-  const { data: invoice, error: fetchError } = await supabase
+  // 1. Try fetching from standard invoices
+  let { data: invoice, error: fetchError } = await supabase
     .from('invoices')
     .select('id, invoice_submitted')
     .eq('id', invoiceId)
@@ -1650,8 +1706,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
           .update({ invoice_submitted_admin: true })
           .eq('id', invoiceId)
           .select();
-        if (error) return res.status(400).json(error);
-        return res.json({ message: 'Admin confirmed invoice submission.', data });
+        return error ? res.status(400).json(error) : res.json({ message: 'Admin confirmed invoice submission.', data });
       } else {
         return res.status(400).json({ error: 'Invoice must be submitted first by the company.' });
       }
@@ -1661,136 +1716,82 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
         .update({ invoice_submitted: true })
         .eq('id', invoiceId)
         .select();
-      if (data) {
-        const { data: companyData, error: companyError } = await supabase
-          .from('companies')
-          .select('*')
-          .eq('id', companyid)
-          .single();
-
-        if (companyError || !companyData) {
-          console.error("Failed to fetch company:", companyError);
-          return;
-        }
-
-        const { data: updateData, error: updateError } = await supabase
-          .from('companies')
-          .update({ last_invoice_paid: new Date().toISOString() })
-          .eq('id', companyid);
-
-        const { error: companyUpdateError } = await supabase
-          .from('companies')
-          .update({
-            document_shared: 0,
-            document_downloaded: 0,
-            document_uploaded: 0
-          })
-          .eq('id', companyid);
-
-      }
-
-      if (!data) {
-        const { data: clientInvoice, error: clientError } = await supabase
-          .from('client_invoices')
-          .select('id, invoice_submitted')
-          .eq('id', invoiceId)
-          .single();
-
-        if (clientError || !clientInvoice) {
-          return res.status(404).json({ error: 'Invoice not found in either table.' });
-        }
-
-        if (role === 'owner') {
-          if (clientInvoice.invoice_submitted === true) {
-            const { data, error } = await supabase
-              .from('client_invoices')
-              .update({ invoice_submitted_admin: true })
-              .eq('id', invoiceId)
-              .select();
-            if (error) return res.status(400).json(error);
-            return res.json({ message: 'Admin confirmed client invoice submission.', data });
-          } else {
-            return res.status(400).json({ error: 'Client invoice must be submitted first.' });
-          }
-        } else {
-          const { data, error } = await supabase
-            .from('client_invoices')
-            .update({ invoice_submitted: true })
-            .eq('id', invoiceId)
-            .select();
-
-          const { data: updateClient, error: updateClientError } = await supabase
-            .from('clients')
-            .update({ last_invoice_paid: new Date().toISOString() })
-            .eq('id', userid);
-
-          const { error: resetDocsError } = await supabase
-            .from('clients')
-            .update({
-              document_shared: 0,
-              document_downloaded: 0,
-              document_uploaded: 0
-            })
-            .eq('id', userid);
-
-          if (error) return res.status(400).json(error);
-          return res.json({ role: role, message: 'Client invoice marked as submitted.', data });
-        }
-      }
 
       if (error) return res.status(400).json(error);
-      return res.json({ message: 'Invoice marked as submitted by company.', data });
-    }
-  }
 
-  const { data: clientInvoice, error: clientError } = await supabase
-    .from('client_invoices')
-    .select('id, invoice_submitted')
-    .eq('id', invoiceId)
-    .single();
-
-  if (clientError || !clientInvoice) {
-    return res.status(404).json({ error: 'Invoice not found in either table.' });
-  }
-
-  if (role === 'owner') {
-    if (clientInvoice.invoice_submitted === true) {
-      const { data, error } = await supabase
-        .from('client_invoices')
-        .update({ invoice_submitted_admin: true })
-        .eq('id', invoiceId)
-        .select();
-      if (error) return res.status(400).json(error);
-      return res.json({ message: 'Admin confirmed client invoice submission.', data });
-    } else {
-      return res.status(400).json({ error: 'Client invoice must be submitted first.' });
-    }
-  } else {
-    const { data, error } = await supabase
-      .from('client_invoices')
-      .update({ invoice_submitted: true })
-      .eq('id', invoiceId)
-      .select();
-
-    const { data: updateClient, error: updateClientError } = await supabase
-      .from('clients')
-      .update({ last_invoice_paid: new Date().toISOString() })
-      .eq('id', userid);
-
-    const { error: resetDocsError } = await supabase
-      .from('clients')
-      .update({
+      // Optional: Reset company stats
+      await supabase.from('companies').update({
+        last_invoice_paid: new Date().toISOString(),
         document_shared: 0,
         document_downloaded: 0,
         document_uploaded: 0
-      })
-      .eq('id', userid);
+      }).eq('id', companyId);
 
-
-    if (error) return res.status(400).json(error);
-    return res.json({ message: 'Client invoice marked as submitted.', data });
+      return res.json({ message: 'Invoice submitted successfully.', data });
+    }
   }
+
+  // 2. If not in standard, try fetching from custom_invoices
+  const { data: customInvoice, error: customError } = await supabase
+    .from('custom_invoices')
+    .select('id, is_client, invoice_submitted, invoice_submitted_admin')
+    .eq('id', invoiceId)
+    .single();
+
+  if (customError || !customInvoice) {
+    return res.status(404).json({ error: 'Invoice not found in any table.' });
+  }
+
+  // 🔁 Handle logic based on role and is_client
+  if (role === 'client') {
+    if (customInvoice.is_client) {
+      const { data, error } = await supabase
+        .from('custom_invoices')
+        .update({ invoice_submitted: true })
+        .eq('id', invoiceId)
+        .select();
+      return error ? res.status(400).json(error) : res.json({ message: 'Client submitted invoice.', data });
+    } else {
+      return res.status(403).json({ error: 'Client cannot submit this invoice.' });
+    }
+  }
+
+  if (role === 'owner') {
+    if (customInvoice.is_client && customInvoice.invoice_submitted) {
+      const { data, error } = await supabase
+        .from('custom_invoices')
+        .update({ invoice_submitted_admin: true })
+        .eq('id', invoiceId)
+        .select();
+      return error ? res.status(400).json(error) : res.json({ message: 'Owner approved client invoice.', data });
+    }
+
+    if (!customInvoice.is_client) {
+      const { data, error } = await supabase
+        .from('custom_invoices')
+        .update({ invoice_submitted: true })
+        .eq('id', invoiceId)
+        .select();
+      return error ? res.status(400).json(error) : res.json({ message: 'Owner submitted invoice.', data });
+    }
+  }
+
+  if (role === 'admin') {
+    if (!customInvoice.is_client && customInvoice.invoice_submitted) {
+      const { data, error } = await supabase
+        .from('custom_invoices')
+        .update({ invoice_submitted_admin: true })
+        .eq('id', invoiceId)
+        .select();
+      return error ? res.status(400).json(error) : res.json({ message: 'Admin approved owner invoice.', data });
+    } else {
+      return res.status(400).json({ error: 'Invoice must be submitted by owner first.' });
+    }
+  }
+
+  return res.status(403).json({ error: 'Unauthorized or invalid invoice state.' });
 });
+
 const sendWelcomeEmail = async (companyName, email, password, loginLink) => {
   if (!companyName || !email || !password || !loginLink) {
     return { error: 'Missing required fields.' };
@@ -2421,7 +2422,7 @@ app.get('/invoice-preview', authenticateToken, async (req, res) => {
 
 app.post('/custom-invoice', authenticateToken, async (req, res) => {
   const role = req.user.role.toLowerCase();
-  const companyId = req.user.companyId.toLowerCase();
+  const companyId = req.user.companyId;
   const {
     company_id,
     date,
