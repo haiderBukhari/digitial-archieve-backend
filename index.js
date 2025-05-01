@@ -2509,16 +2509,13 @@ app.get('/custom-invoices', authenticateToken, async (req, res) => {
   res.json(data);
 });
 
-
 app.get('/custom-invoice/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { companyId } = req.user;
 
   const { data, error } = await supabase
     .from('custom_invoices')
     .select('*')
     .eq('id', id)
-    .eq('company_id', companyId)
     .single();
 
   if (error) return res.status(400).json({ error });
