@@ -1538,37 +1538,69 @@ app.get('/invoices', authenticateToken, async (req, res) => {
   const { role, companyId, userId } = req.user;
   const roleLower = role.toLowerCase();
 
-  // If client, fetch their email first
-  if (roleLower === 'client') {
-    const { data: client, error: clientError } = await supabase
-      .from('clients')
-      .select('email')
-      .eq('id', userId)
-      .single();
+  try {
+    if (roleLower === 'client') {
+      const { data: client, error: clientError } = await supabase
+        .from('clients')
+        .select('email')
+        .eq('id', userId)
+        .single();
 
-    if (clientError || !client) {
-      return res.status(404).json({ error: 'Client not found' });
+      if (clientError || !client) {
+        return res.status(404).json({ error: 'Client not found' });
+      }
+
+      const { data: clientInvoices, error: invoiceError } = await supabase
+        .from('client_invoices')
+        .select('*')
+        .eq('email', client.email)
+        .order('created_at', { ascending: true });
+
+      if (invoiceError) return res.status(400).json(invoiceError);
+      return res.json(clientInvoices);
     }
 
-    const { data: clientInvoices, error: invoiceError } = await supabase
-      .from('client_invoices')
-      .select('*')
-      .eq('email', client.email)
-      .order('created_at', { ascending: false });
+    // --- OWNER / ADMIN ---
+    const [standardInvoices, customInvoices] = await Promise.all([
+      supabase
+        .from('invoices')
+        .select('*')
+        .eq('company_id', companyId),
+      supabase
+        .from('custom_invoices')
+        .select('*')
+        .eq('company_id', companyId)
+    ]);
 
-    if (invoiceError) return res.status(400).json(invoiceError);
-    return res.json(clientInvoices);
+    if (standardInvoices.error || customInvoices.error) {
+      return res.status(400).json({
+        error: standardInvoices.error || customInvoices.error
+      });
+    }
+
+    // Map both and normalize fields
+    const standard = (standardInvoices.data || []).map(inv => ({
+      ...inv,
+      type: 'standard',
+      invoice_month: inv.invoice_month || 'Unknown',
+    }));
+
+    const custom = (customInvoices.data || []).map(inv => ({
+      ...inv,
+      type: 'custom',
+      invoice_month: 'Custom Invoice',
+    }));
+
+    // Combine and sort by created_at ASC
+    const combined = [...standard, ...custom].sort(
+      (a, b) => new Date(a.created_at) - new Date(b.created_at)
+    );
+
+    return res.json(combined);
+  } catch (err) {
+    console.error('Invoice fetch error:', err);
+    return res.status(500).json({ error: 'Server error' });
   }
-
-  // If owner/admin, fetch all company invoices
-  let query = supabase.from('invoices').select('*');
-  if (roleLower === 'owner') {
-    query = query.eq('company_id', companyId);
-  }
-
-  const { data, error } = await query.order('created_at', { ascending: false });
-  if (error) return res.status(400).json(error);
-  res.json(data);
 });
 
 app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
@@ -2361,9 +2393,9 @@ app.get('/invoice-preview', authenticateToken, async (req, res) => {
 });
 
 app.post('/custom-invoice', authenticateToken, async (req, res) => {
-  const { companyId } = req.user;
   const {
     is_client,
+    company_id,
     date,
     payment_term,
     due_date,
@@ -2381,7 +2413,7 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
   const { data, error } = await supabase
     .from('custom_invoices')
     .insert([{
-      company_id: companyId,
+      company_id: company_id,
       is_client,
       date,
       payment_term,
@@ -2430,6 +2462,7 @@ app.get('/custom-invoices', authenticateToken, async (req, res) => {
   if (error) return res.status(400).json({ error });
   res.json(data);
 });
+
 
 app.get('/custom-invoice/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
