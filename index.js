@@ -2245,5 +2245,119 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
   });
 });
 
+app.get('/invoice-preview', authenticateToken, async (req, res) => {
+  const { companyId } = req.user;
+  const currentDate = new Date();
+
+  try {
+    // 1. Fetch company
+    const { data: company, error: companyError } = await supabase
+      .from('companies')
+      .select('id, name, plan_id, document_shared, document_downloaded, document_uploaded, created_at, last_invoice_paid')
+      .eq('id', companyId)
+      .single();
+    if (companyError || !company) return res.status(400).json({ error: 'Company not found' });
+
+    // 2. Fetch plan
+    const { data: plan, error: planError } = await supabase
+      .from('plans')
+      .select('*')
+      .eq('id', company.plan_id)
+      .single();
+    if (planError || !plan) return res.status(400).json({ error: 'Plan not found' });
+
+    // 3. Invoice calculation
+    const lastPaid = new Date(company.last_invoice_paid || company.created_at);
+    const nextBillingDate = addMonths(lastPaid, plan.billing_duration || 1);
+    const daysUntilDue = differenceInDays(nextBillingDate, currentDate);
+
+    const monthly = parseFloat(plan.price_description) || 0;
+    const upload_count = parseFloat(plan.upload_count) || 1;
+    const download_count = parseFloat(plan.download_count) || 1;
+    const share_count = parseFloat(plan.share_count) || 1;
+
+    const shared_amount = parseFloat(((company.document_shared || 0) / share_count) * (plan.share_price_per_thousand || 0)).toFixed(2);
+    const download_amount = parseFloat(((company.document_downloaded || 0) / download_count) * (plan.download_price_per_thousand || 0)).toFixed(2);
+    const upload_amount = parseFloat(((company.document_uploaded || 0) / upload_count) * (plan.upload_price_per_ten || 0)).toFixed(2);
+
+    const totalInvoiceAmount = parseFloat((parseFloat(monthly) + parseFloat(shared_amount) + parseFloat(download_amount) + parseFloat(upload_amount)).toFixed(2));
+
+    // 4. Fetch clients
+    const { data: clients, error: clientError } = await supabase
+      .from('clients')
+      .select('email')
+      .eq('company_id', companyId);
+    if (clientError) return res.status(400).json({ error: 'Failed to fetch clients' });
+
+    const totalClients = clients.length;
+    const clientEmails = clients.map(c => c.email);
+
+    // 5. Fetch client invoices
+    const { data: clientInvoices, error: invoiceError } = await supabase
+      .from('client_invoices')
+      .select('invoice_value, invoice_submitted, email')
+      .in('email', clientEmails);
+    if (invoiceError) return res.status(400).json({ error: 'Failed to fetch invoices' });
+
+    let totalInvoiceValue = 0;
+    let totalPaid = 0;
+    for (const invoice of clientInvoices) {
+      const val = parseFloat(invoice.invoice_value || 0);
+      totalInvoiceValue += val;
+      if (invoice.invoice_submitted) totalPaid += val;
+    }
+
+    // 6. Fetch documents
+    const { data: documents, error: docError } = await supabase
+      .from('documents')
+      .select('is_published')
+      .eq('company_id', companyId);
+    if (docError) return res.status(400).json({ error: 'Failed to fetch documents', docError });
+
+    const totalDocuments = documents.length;
+    const completeDocuments = documents.filter(doc => doc.is_published === true).length;
+    const incompleteDocuments = totalDocuments - completeDocuments;
+
+    // 7. Fetch disputes
+    const { data: disputes, error: disputeError } = await supabase
+      .from('disputes')
+      .select('resolve')
+      .eq('company_id', companyId);
+    if (disputeError) return res.status(400).json({ error: 'Failed to fetch disputes' });
+
+    const resolvedDisputes = disputes.filter(d => d.resolve === true).length;
+    const activeDisputes = disputes.length - resolvedDisputes;
+
+    // ✅ Final Response
+    return res.json({
+      company: company.name,
+      planName: plan.name,
+      nextBillingDueInDays: daysUntilDue,
+      invoiceBreakdown: {
+        monthlyCharge: parseFloat(monthly),
+        uploadCharge: parseFloat(upload_amount),
+        downloadCharge: parseFloat(download_amount),
+        shareCharge: parseFloat(shared_amount),
+        totalInvoiceAmount
+      },
+      metrics: {
+        totalInvoiceValue: totalInvoiceValue.toFixed(2),
+        totalInvoicesPaid: totalPaid.toFixed(2),
+        totalClients,
+        totalDocuments,
+        completeDocuments,
+        incompleteDocuments,
+        documentsDownloaded: company.document_downloaded || 0,
+        documentsShared: company.document_shared || 0,
+        documentsUploaded: company.document_uploaded || 0,
+        activeDisputes,
+        resolvedDisputes
+      }
+    });
+
+  } catch (err) {
+    return res.status(500).json({ error: 'Server error', details: err.message });
+  }
+});
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
