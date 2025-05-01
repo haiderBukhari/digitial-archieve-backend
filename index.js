@@ -1539,6 +1539,7 @@ app.get('/invoices', authenticateToken, async (req, res) => {
   const roleLower = role.toLowerCase();
 
   try {
+    // 📍 For CLIENT
     if (roleLower === 'client') {
       const { data: client, error: clientError } = await supabase
         .from('clients')
@@ -1560,43 +1561,69 @@ app.get('/invoices', authenticateToken, async (req, res) => {
       return res.json(clientInvoices);
     }
 
-    // --- OWNER / ADMIN ---
-    const [standardInvoices, customInvoices] = await Promise.all([
-      supabase
-        .from('invoices')
-        .select('*')
-        .eq('company_id', companyId),
-      supabase
-        .from('custom_invoices')
-        .select('*')
-        .eq('company_id', companyId)
-    ]);
+    // 📍 For OWNER (uses companyId)
+    if (roleLower === 'owner') {
+      if (!companyId) {
+        return res.status(400).json({ error: 'Missing company ID for owner' });
+      }
 
-    if (standardInvoices.error || customInvoices.error) {
-      return res.status(400).json({
-        error: standardInvoices.error || customInvoices.error
-      });
+      const [standardInvoices, customInvoices] = await Promise.all([
+        supabase.from('invoices').select('*').eq('company_id', companyId),
+        supabase.from('custom_invoices').select('*').eq('company_id', companyId)
+      ]);
+
+      if (standardInvoices.error || customInvoices.error) {
+        return res.status(400).json({ error: standardInvoices.error || customInvoices.error });
+      }
+
+      const standard = (standardInvoices.data || []).map(inv => ({
+        ...inv,
+        type: 'standard',
+        invoice_month: inv.invoice_month || 'Unknown',
+      }));
+
+      const custom = (customInvoices.data || []).map(inv => ({
+        ...inv,
+        type: 'custom',
+        invoice_month: 'Custom Invoice',
+      }));
+
+      const combined = [...standard, ...custom].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      return res.json(combined);
     }
 
-    // Map both and normalize fields
-    const standard = (standardInvoices.data || []).map(inv => ({
-      ...inv,
-      type: 'standard',
-      invoice_month: inv.invoice_month || 'Unknown',
-    }));
+    // 📍 For ADMIN (get ALL invoices, no filter)
+    if (roleLower === 'admin') {
+      const [standardInvoices, customInvoices] = await Promise.all([
+        supabase.from('invoices').select('*'),
+        supabase.from('custom_invoices').select('*')
+      ]);
 
-    const custom = (customInvoices.data || []).map(inv => ({
-      ...inv,
-      type: 'custom',
-      invoice_month: 'Custom Invoice',
-    }));
+      if (standardInvoices.error || customInvoices.error) {
+        return res.status(400).json({ error: standardInvoices.error || customInvoices.error });
+      }
 
-    // Combine and sort by created_at ASC
-    const combined = [...standard, ...custom].sort(
-      (a, b) => new Date(a.created_at) - new Date(b.created_at)
-    );
+      const standard = (standardInvoices.data || []).map(inv => ({
+        ...inv,
+        type: 'standard',
+        invoice_month: inv.invoice_month || 'Unknown',
+      }));
 
-    return res.json(combined);
+      const custom = (customInvoices.data || []).map(inv => ({
+        ...inv,
+        type: 'custom',
+        invoice_month: 'Custom Invoice',
+      }));
+
+      const combined = [...standard, ...custom].sort((a, b) => {
+        return Date.parse(b.created_at) - Date.parse(a.created_at);
+      });
+                  
+      return res.json(combined);
+    }
+
+    return res.status(403).json({ error: 'Unauthorized role' });
+
   } catch (err) {
     console.error('Invoice fetch error:', err);
     return res.status(500).json({ error: 'Server error' });
@@ -2393,8 +2420,8 @@ app.get('/invoice-preview', authenticateToken, async (req, res) => {
 });
 
 app.post('/custom-invoice', authenticateToken, async (req, res) => {
+  const role = req.user.role.toLowerCase();
   const {
-    is_client,
     company_id,
     date,
     payment_term,
@@ -2410,11 +2437,29 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
     notes
   } = req.body;
 
+  // Check if the role is admin
+  let admin_name = null;
+  if (role === "admin") {
+    // Fetch the admin_name from the companies table
+    const { data: companyData, error: companyError } = await supabase
+      .from('companies')
+      .select('admin_name')
+      .eq('id', company_id)
+      .single();
+
+    if (companyError) {
+      return res.status(400).json({ error: companyError.message });
+    }
+
+    admin_name = companyData.admin_name; // Get the admin_name from the response
+  }
+
+  // Insert the custom invoice with admin_name or owner_name depending on the role
   const { data, error } = await supabase
     .from('custom_invoices')
     .insert([{
       company_id: company_id,
-      is_client,
+      is_client: role === "admin" ? false : true,
       date,
       payment_term,
       due_date,
@@ -2426,7 +2471,8 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
       discount_percent,
       tax_percent,
       total,
-      notes
+      notes,
+      owner_name: role === "admin" ? admin_name : client_name // Use admin_name if admin, otherwise use client_name
     }])
     .select();
 
