@@ -1697,18 +1697,39 @@ app.get('/invoices', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/check-invoice-submission', async (req, res) => {
+app.get('/check-invoice-submission', authenticateToken, async (req, res) => {
+  const { role, companyId } = req.user;
+  const roleLower = role.toLowerCase();
+
   try {
-    const { data: companies, error } = await supabase
-      .from('invoices')
-      .select('is_submitted');
+    let hasUnsubmitted = false;
 
-    if (error) {
-      console.error('Supabase error:', error);
-      return res.status(500).json({ message: 'Failed to fetch companies' });
+    if (roleLower === 'admin') {
+      const { data: invoices, error } = await supabase
+        .from('invoices')
+        .select('is_submitted');
+
+      if (error) {
+        console.error('Supabase error (admin):', error);
+        return res.status(500).json({ message: 'Failed to fetch invoices' });
+      }
+
+      hasUnsubmitted = invoices.some(inv => inv.is_submitted !== true);
+    } 
+    
+    else if (roleLower === 'owner') {
+      const { data: clientInvoices, error } = await supabase
+        .from('client_invoices')
+        .select('is_submitted')
+        .eq('company_id', companyId);
+
+      if (error) {
+        console.error('Supabase error (owner):', error);
+        return res.status(500).json({ message: 'Failed to fetch client invoices' });
+      }
+
+      hasUnsubmitted = clientInvoices.some(inv => inv.is_submitted !== true);
     }
-
-    const hasUnsubmitted = companies.some(company => company.is_submitted !== true);
 
     return res.status(200).json({ showSendInvoice: hasUnsubmitted });
   } catch (err) {
@@ -1717,19 +1738,37 @@ app.get('/check-invoice-submission', async (req, res) => {
   }
 });
 
-app.post('/submit-all-companies', async (req, res) => {
+app.post('/submit-all-companies', authenticateToken, async (req, res) => {
+  const { role, companyId } = req.user;
+  const roleLower = role.toLowerCase();
+
   try {
-    const { error } = await supabase
-      .from('invoices')
-      .update({ is_submitted: true })
-      .not('id', 'is', null);
+    let error;
+
+    if (roleLower === 'admin') {
+      const update = await supabase
+        .from('invoices')
+        .update({ is_submitted: true })
+        .not('id', 'is', null);
+
+      error = update.error;
+    } 
+    
+    else if (roleLower === 'owner') {
+      const update = await supabase
+        .from('client_invoices')
+        .update({ is_submitted: true })
+        .eq('company_id', companyId);
+
+      error = update.error;
+    }
 
     if (error) {
       console.error('Supabase update error:', error);
-      return res.status(500).json({ message: 'Failed to update companies' });
+      return res.status(500).json({ message: 'Failed to mark invoices as submitted' });
     }
 
-    return res.status(200).json({ message: 'All companies marked as submitted' });
+    return res.status(200).json({ message: 'Invoices marked as submitted' });
   } catch (err) {
     console.error('Unexpected error:', err);
     return res.status(500).json({ message: 'Server error' });
