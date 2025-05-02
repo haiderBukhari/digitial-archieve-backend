@@ -1183,6 +1183,8 @@ app.post('/generate-invoices', async (req, res) => {
 
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
+    const nextDueDate = new Date();
+    nextDueDate.setDate(currentDate.getDate() + 15);
 
     const { data: invoiceData, error: invoiceInsertError } = await supabase
       .from('invoices')
@@ -1200,16 +1202,15 @@ app.post('/generate-invoices', async (req, res) => {
         document_uploaded: docUploaded,
         upload_amount,
         invoice_submitted: false,
-        owner_name: company.admin_name
-       })
+        owner_name: company.admin_name,
+        is_submitted: false,
+        last_date: nextDueDate.toISOString()
+      })
       .select();
 
     if (invoiceInsertError) {
       results.push({ company: company.name, status: 'Invoice creation failed' });
     } else {
-      const nextDueDate = new Date();
-      nextDueDate.setDate(currentDate.getDate() + 15);
-      await supabase.from('companies').update({ last_date: nextDueDate.toISOString() }).eq('id', company.id);
       results.push({ company: company.name, status: 'Invoice created', invoice: invoiceData });
     }
   }
@@ -1342,19 +1343,18 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
       continue;
     }
 
+    // Calculate month difference
     const billingDuration = plan.billing_duration || 1;
-    const lastPaidDate = client.last_invoice_paid ? new Date(client.last_invoice_paid) : new Date(client.created_at);
-    const nextBillingDate = addMonths(lastPaidDate, billingDuration);
-    const daysUntilDue = differenceInDays(nextBillingDate, currentDate);
+    const referenceDate = new Date(client.last_invoice_paid || client.created_at);
+    const monthDifference =
+      (currentDate.getFullYear() - referenceDate.getFullYear()) * 12 +
+      (currentDate.getMonth() - referenceDate.getMonth());
 
-    // If the invoice is due today or in the past (you can adjust this threshold as needed)
-    const daysBeforeDue = 5; // Invoices due in the next X days will be processed
-    if (daysUntilDue > daysBeforeDue) {
-      results.push({ client: client.name, status: `Invoice not due yet (due in ${daysUntilDue} days)` });
+    if (monthDifference < billingDuration) {
+      results.push({ client: client.name, status: `Invoice not due yet (waiting ${billingDuration - monthDifference} more month(s))` });
       continue;
     }
 
-    // Avoid duplicate invoice for this month
     const { data: existing } = await supabase
       .from('client_invoices')
       .select('id')
@@ -1381,6 +1381,10 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
     const upload_amount = parseFloat(((docUploaded / upload_count) * parseFloat(plan.upload_price_per_ten || 0)).toFixed(4));
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
+
+    const nextDueDate = new Date();
+    nextDueDate.setDate(currentDate.getDate() + 15);
+
     const { error: insertError } = await supabase
       .from('client_invoices')
       .insert([{
@@ -1397,14 +1401,17 @@ app.post('/generate-client-invoices', authenticateToken, async (req, res) => {
         download_amount,
         document_uploaded: docUploaded,
         upload_amount,
-        invoice_submitted: false
+        invoice_submitted: false,
+        is_submitted: false,
+        last_date: nextDueDate.toISOString()
       }]);
 
     if (insertError) {
-      results.push({ client: client.name, status: 'Failed to create invoice' });
-    } else {
-      results.push({ client: client.name, status: 'Invoice created' });
+      results.push({ client: client.name, status: 'Failed to insert invoice' });
+      continue;
     }
+
+    results.push({ client: client.name, status: 'Invoice generated successfully' });
   }
 
   res.json({ results });
@@ -1581,11 +1588,11 @@ app.get('/invoices', authenticateToken, async (req, res) => {
         .select('email')
         .eq('id', userId)
         .single();
-    
+
       if (clientError || !client) {
         return res.status(404).json({ error: 'Client not found' });
       }
-    
+
       const [clientInvoices, customClientInvoices] = await Promise.all([
         supabase
           .from('client_invoices')
@@ -1597,31 +1604,31 @@ app.get('/invoices', authenticateToken, async (req, res) => {
           .eq('is_client', true)
           .eq('user_id', userId)
       ]);
-    
+
       if (clientInvoices.error || customClientInvoices.error) {
         return res.status(400).json({
           error: clientInvoices.error?.message || customClientInvoices.error?.message
         });
       }
-    
+
       const standard = (clientInvoices.data || []).map(inv => ({
         ...inv,
         type: 'standard',
         invoice_month: inv.invoice_month || 'Unknown',
       }));
-    
+
       const custom = (customClientInvoices.data || []).map(inv => ({
         ...inv,
         type: 'custom',
         invoice_month: 'Custom Invoice',
       }));
-    
+
       const combined = [...standard, ...custom].sort((a, b) => {
         return Date.parse(b.created_at) - Date.parse(a.created_at);
       });
-    
+
       return res.json(combined);
-    }    
+    }
 
     if (roleLower === 'owner') {
       if (!companyId) {
@@ -1629,7 +1636,7 @@ app.get('/invoices', authenticateToken, async (req, res) => {
       }
 
       const [standardInvoices, customInvoices] = await Promise.all([
-        supabase.from('invoices').select('*').eq('company_id', companyId),
+        supabase.from('invoices').select('*').eq('company_id', companyId).eq('is_submitted', true),
         supabase.from('custom_invoices').select('*').eq('company_id', companyId).eq('is_client', false)
       ]);
 
@@ -1678,7 +1685,7 @@ app.get('/invoices', authenticateToken, async (req, res) => {
       const combined = [...standard, ...custom].sort((a, b) => {
         return Date.parse(b.created_at) - Date.parse(a.created_at);
       });
-                  
+
       return res.json(combined);
     }
 
@@ -1693,7 +1700,7 @@ app.get('/invoices', authenticateToken, async (req, res) => {
 app.get('/check-invoice-submission', async (req, res) => {
   try {
     const { data: companies, error } = await supabase
-      .from('companies')
+      .from('invoices')
       .select('is_submitted');
 
     if (error) {
@@ -1713,9 +1720,9 @@ app.get('/check-invoice-submission', async (req, res) => {
 app.post('/submit-all-companies', async (req, res) => {
   try {
     const { error } = await supabase
-      .from('companies')
+      .from('invoices')
       .update({ is_submitted: true })
-      .neq('is_submitted', true); // Only update if not already true
+      .not('id', 'is', null);
 
     if (error) {
       console.error('Supabase update error:', error);
