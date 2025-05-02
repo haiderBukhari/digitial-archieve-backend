@@ -1893,18 +1893,6 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
       if (error) return res.status(400).json(error);
 
-      // Fetch client using userId
-      const { data: client, error: clientError } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('user_id', userId)
-        .single();
-
-      if (clientError || !client) {
-        return res.status(404).json({ error: 'Client not found.' });
-      }
-
-      // Reset client stats
       const updateFields = {
         document_shared: 0,
         document_downloaded: 0,
@@ -1915,7 +1903,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
       const { error: updateError } = await supabase
         .from('clients')
         .update(updateFields)
-        .eq('id', client.id);
+        .eq('id', userId);
 
       if (updateError) return res.status(400).json(updateError);
 
