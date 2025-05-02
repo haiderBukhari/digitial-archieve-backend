@@ -2582,7 +2582,6 @@ app.get('/invoice-preview', authenticateToken, async (req, res) => {
 app.post('/custom-invoice', authenticateToken, async (req, res) => {
   const role = req.user.role.toLowerCase();
   const companyId = req.user.companyId;
-
   const {
     company_id,
     date,
@@ -2592,7 +2591,6 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
     client_name,
     user_id,
     bill_to,
-    client_email,
     quantities,
     subtotal,
     discount_percent,
@@ -2614,10 +2612,10 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: companyError.message });
     }
 
-    admin_name = companyData.admin_name;
+    admin_name = companyData.admin_name; // Get the admin_name from the response
   }
 
-  // Insert invoice into Supabase
+  // Insert the custom invoice with admin_name or owner_name depending on the role
   const { data, error } = await supabase
     .from('custom_invoices')
     .insert([{
@@ -2636,61 +2634,12 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
       tax_percent,
       total,
       notes,
-      owner_name: role === "admin" ? admin_name : client_name
+      owner_name: role === "admin" ? admin_name : client_name // Use admin_name if admin, otherwise use client_name
     }])
     .select();
 
   if (error) return res.status(400).json({ error });
-
-  // Send email to client
-  try {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        type: "OAuth2",
-        user: process.env.EMAIL_HOST,
-        clientId: process.env.CLIENT_ID,
-        clientSecret: process.env.CLIENT_SECRET,
-        refreshToken: process.env.OAUTH_REFRESH_TOKEN,
-      },
-    });
-
-    const subject = `🧾 New Invoice from ${company_name}`;
-
-    const emailBody = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-        <div style="background-color: #22BC66; padding: 20px; text-align: center;">
-          <h1 style="color: #fff; margin: 0;">Talo Innovations</h1>
-        </div>
-        <div style="padding: 20px; color: #333;">
-          <h2>Hello ${client_name},</h2>
-          <p>You’ve received a new invoice from <strong>${company_name}</strong>.</p>
-          <p><strong>Invoice Date:</strong> ${date}</p>
-          <p><strong>Due Date:</strong> ${due_date}</p>
-          <p><strong>Total:</strong> $${total}</p>
-          <p>Please log in to your account to view and pay the invoice.</p>
-          <div style="text-align: center; margin: 20px 0;">
-            <a href="${process.env.LOGIN_LINK || '#'}" style="background-color: #22BC66; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-size: 16px;">
-              View Invoice
-            </a>
-          </div>
-          <p>Thank you,<br/>The Talo Innovations Team</p>
-        </div>
-      </div>
-    `;
-
-    await transporter.sendMail({
-      from: `"Talo Innovations" <${process.env.EMAIL_HOST}>`,
-      to: client_email,
-      subject,
-      html: emailBody
-    });
-  } catch (emailError) {
-    console.error('Error sending email:', emailError);
-    return res.status(500).json({ error: 'Invoice saved but email failed to send.' });
-  }
-
-  res.status(201).json({ message: 'Invoice sent and saved successfully.', data: data[0] });
+  res.status(201).json(data[0]);
 });
 
 app.put('/custom-invoice/:id', authenticateToken, async (req, res) => {
