@@ -1716,8 +1716,8 @@ app.get('/check-invoice-submission', authenticateToken, async (req, res) => {
       }
 
       hasUnsubmitted = invoices.some(inv => inv.is_submitted !== true);
-    } 
-    
+    }
+
     else if (roleLower === 'owner') {
       const { data: clientInvoices, error } = await supabase
         .from('client_invoices')
@@ -1754,8 +1754,8 @@ app.post('/submit-all-companies', authenticateToken, async (req, res) => {
         .not('id', 'is', null);
 
       error = update.error;
-    } 
-    
+    }
+
     else if (roleLower === 'owner') {
       const update = await supabase
         .from('client_invoices')
@@ -1809,7 +1809,6 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
       if (error) return res.status(400).json(error);
 
-      // Reset stats
       await supabase.from('companies').update({
         last_invoice_paid: new Date().toISOString(),
         document_shared: 0,
@@ -1821,7 +1820,6 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
     }
   }
 
-  // 2. Try custom invoices
   const { data: customInvoice, error: customError } = await supabase
     .from('custom_invoices')
     .select('id, is_client, invoice_submitted, invoice_submitted_admin')
@@ -1877,20 +1875,51 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   }
 
   // 3. Try client_invoices
-  const { data: clientInvoice, error: clientError } = await supabase
+  // 3. Try client_invoices
+  const { data: clientInvoice, error: clientInvoiceError } = await supabase
     .from('client_invoices')
-    .select('id, email, company_id, invoice_submitted, invoice_submitted_admin')
+    .select('id, invoice_submitted, invoice_submitted_admin')
     .eq('id', invoiceId)
     .single();
 
   if (clientInvoice) {
     if (roleLower === 'client') {
+      // Mark invoice_submitted true
       const { data, error } = await supabase
         .from('client_invoices')
         .update({ invoice_submitted: true })
         .eq('id', invoiceId)
         .select();
-      return error ? res.status(400).json(error) : res.json({ message: 'Client submitted client invoice.', data });
+
+      if (error) return res.status(400).json(error);
+
+      // Fetch client using userId
+      const { data: client, error: clientError } = await supabase
+        .from('clients')
+        .select('id')
+        .eq('user_id', userId)
+        .single();
+
+      if (clientError || !client) {
+        return res.status(404).json({ error: 'Client not found.' });
+      }
+
+      // Reset client stats
+      const updateFields = {
+        document_shared: 0,
+        document_downloaded: 0,
+        document_uploaded: 0,
+        last_invoice_paid: new Date().toISOString()
+      };
+
+      const { error: updateError } = await supabase
+        .from('clients')
+        .update(updateFields)
+        .eq('id', client.id);
+
+      if (updateError) return res.status(400).json(updateError);
+
+      return res.json({ message: 'Client invoice submitted and stats reset.', data });
     }
 
     if (roleLower === 'owner') {
@@ -1900,26 +1929,13 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
           .update({ invoice_submitted_admin: true })
           .eq('id', invoiceId)
           .select();
+
         return error ? res.status(400).json(error) : res.json({ message: 'Owner approved client invoice.', data });
       } else {
-        return res.status(400).json({ error: 'Invoice must be submitted by client first.' });
-      }
-    }
-
-    if (roleLower === 'admin') {
-      if (clientInvoice.invoice_submitted === true) {
-        const { data, error } = await supabase
-          .from('client_invoices')
-          .update({ invoice_submitted_admin: true })
-          .eq('id', invoiceId)
-          .select();
-        return error ? res.status(400).json(error) : res.json({ message: 'Admin approved client invoice.', data });
-      } else {
-        return res.status(400).json({ error: 'Client invoice must be submitted first.' });
+        return res.status(400).json({ error: 'Client must submit the invoice first.' });
       }
     }
   }
-
   // 4. If not found in any table
   return res.status(404).json({ error: 'Invoice not found in any table.' });
 });
