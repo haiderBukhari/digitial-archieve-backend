@@ -2067,7 +2067,7 @@ app.get('/get-shared-url/:document_id', authenticateToken, async (req, res) => {
     .single();
 
   if (error || !data) {
-    return res.status(404).json({ error: 'Shared document not found.' });
+    return res.status(400).json({ error: 'Shared document not found.' });
   }
 
   // ✅ Increment download count
