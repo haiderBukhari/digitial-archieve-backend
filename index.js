@@ -1116,7 +1116,6 @@ app.post('/generate-invoices', async (req, res) => {
   const currentDate = new Date();
   const currentMonth = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-  // Fetch all active companies
   const { data: companies, error: companyError } = await supabase
     .from('companies')
     .select(`
@@ -1128,14 +1127,12 @@ app.post('/generate-invoices', async (req, res) => {
 
   if (companyError) return res.status(400).json({ error: 'Failed to fetch companies' });
 
-  // Fetch all plans once
   const { data: allPlans, error: planFetchError } = await supabase
     .from('plans')
     .select('*');
 
   if (planFetchError) return res.status(400).json({ error: 'Failed to fetch plans' });
 
-  // Fetch all invoices for this month
   const { data: existingInvoices, error: invoiceFetchError } = await supabase
     .from('invoices')
     .select('company_id')
@@ -1158,16 +1155,19 @@ app.post('/generate-invoices', async (req, res) => {
       continue;
     }
 
-    const lastPaid = new Date(company.last_invoice_paid || company.created_at);
-    const nextBillingDate = addMonths(lastPaid, plan.billing_duration || 1);
-    const daysUntilDue = differenceInDays(nextBillingDate, currentDate);
+    const referenceDate = new Date(company.last_invoice_paid || company.created_at);
+    const currentMonthIndex = currentDate.getMonth();
+    const referenceMonthIndex = referenceDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    const referenceYear = referenceDate.getFullYear();
 
-    if (daysUntilDue > 5) {
-      results.push({ company: company.name, status: `Invoice not due yet (due in ${daysUntilDue} days)` });
+    const monthDifference = (currentYear - referenceYear) * 12 + (currentMonthIndex - referenceMonthIndex);
+
+    if (monthDifference < (plan.billing_duration || 1)) {
+      results.push({ company: company.name, status: `Invoice not due yet (waiting ${plan.billing_duration - monthDifference} more month(s))` });
       continue;
     }
 
-    // Calculate invoice
     const monthly = parseFloat(plan.price_description) || 0;
     const upload_count = parseFloat(plan.upload_count) || 1;
     const download_count = parseFloat(plan.download_count) || 1;
@@ -1183,9 +1183,10 @@ app.post('/generate-invoices', async (req, res) => {
 
     const total = parseFloat((monthly + shared_amount + download_amount + upload_amount).toFixed(4));
 
-    const { error: insertError } = await supabase
+
+    const { data: invoiceData, error: invoiceInsertError } = await supabase
       .from('invoices')
-      .insert([{
+      .insert({
         company_id: company.id,
         company_name: company.name,
         email: company.contact_email,
@@ -1200,16 +1201,20 @@ app.post('/generate-invoices', async (req, res) => {
         upload_amount,
         invoice_submitted: false,
         owner_name: company.admin_name
-      }]);
+       })
+      .select();
 
-    if (insertError) {
-      results.push({ company: company.name, status: 'Failed to create invoice' });
+    if (invoiceInsertError) {
+      results.push({ company: company.name, status: 'Invoice creation failed' });
     } else {
-      results.push({ company: company.name, status: 'Invoice created' });
+      const nextDueDate = new Date();
+      nextDueDate.setDate(currentDate.getDate() + 15);
+      await supabase.from('companies').update({ last_date: nextDueDate.toISOString() }).eq('id', company.id);
+      results.push({ company: company.name, status: 'Invoice created', invoice: invoiceData });
     }
   }
 
-  res.json({ results });
+  return res.status(200).json(results);
 });
 
 app.put('/invoices/:id/other-invoices', async (req, res) => {
@@ -1570,7 +1575,6 @@ app.get('/invoices', authenticateToken, async (req, res) => {
   const roleLower = role.toLowerCase();
 
   try {
-    // 📍 For CLIENT
     if (roleLower === 'client') {
       const { data: client, error: clientError } = await supabase
         .from('clients')
@@ -1683,6 +1687,45 @@ app.get('/invoices', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Invoice fetch error:', err);
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/check-invoice-submission', async (req, res) => {
+  try {
+    const { data: companies, error } = await supabase
+      .from('companies')
+      .select('is_submitted');
+
+    if (error) {
+      console.error('Supabase error:', error);
+      return res.status(500).json({ message: 'Failed to fetch companies' });
+    }
+
+    const hasUnsubmitted = companies.some(company => company.is_submitted !== true);
+
+    return res.status(200).json({ showSendInvoice: hasUnsubmitted });
+  } catch (err) {
+    console.error('Unexpected error:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/submit-all-companies', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('companies')
+      .update({ is_submitted: true })
+      .neq('is_submitted', true); // Only update if not already true
+
+    if (error) {
+      console.error('Supabase update error:', error);
+      return res.status(500).json({ message: 'Failed to update companies' });
+    }
+
+    return res.status(200).json({ message: 'All companies marked as submitted' });
+  } catch (err) {
+    console.error('Unexpected error:', err);
+    return res.status(500).json({ message: 'Server error' });
   }
 });
 
