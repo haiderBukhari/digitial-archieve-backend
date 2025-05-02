@@ -2219,42 +2219,68 @@ app.put('/get-profile', authenticateToken, async (req, res) => {
 
 app.get('/document-progress', authenticateToken, async (req, res) => {
   const { userId } = req.user;
+  const { type = 'week' } = req.query; // default is 'week'
 
   const now = new Date();
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday
+  let startDate;
+  let groupByDayName = false;
 
-  // Fetch all edit history by current user since start of week
+  if (type === 'week') {
+    // Start from last Sunday
+    startDate = new Date(now);
+    startDate.setDate(now.getDate() - now.getDay());
+    groupByDayName = true;
+  } else if (type === '15days') {
+    startDate = new Date(now);
+    startDate.setDate(now.getDate() - 14); // Includes today (15 days total)
+  } else if (type === 'month') {
+    startDate = new Date(now);
+    startDate.setDate(now.getDate() - 29); // Includes today (30 days total)
+  } else {
+    return res.status(400).json({ error: 'Invalid type. Must be one of: week, 15days, month.' });
+  }
+
+  // Fetch edit history since the determined start date
   const { data: history, error } = await supabase
     .from('document_edit_history')
     .select('created_at, edit_description')
     .eq('edited_by', userId)
-    .gte('created_at', startOfWeek.toISOString());
+    .gte('created_at', startDate.toISOString());
 
   if (error) return res.status(400).json(error);
 
-  // 🗓️ Daily progress chart
-  const progress = {
-    Sunday: 0, Monday: 0, Tuesday: 0, Wednesday: 0,
-    Thursday: 0, Friday: 0, Saturday: 0
-  };
+  const progress = {};
+  const documents_indexed = history.filter(e => e.edit_description?.toLowerCase().includes('submitted document for indexing')).length;
+  const documents_viewed = history.filter(e => e.edit_description?.toLowerCase().includes('opened the document')).length;
+  const documents_changed = history.filter(e => {
+    const desc = e.edit_description?.toLowerCase();
+    return desc?.includes('changed') || desc?.includes('edited');
+  }).length;
+  const documents_published = history.filter(e => e.edit_description?.toLowerCase().includes('published')).length;
 
-  // 📊 Category counts
-  let documents_indexed = 0;
-  let documents_viewed = 0;
-  let documents_changed = 0;
-  let documents_published = 0;
+  // Initialize progress structure
+  if (groupByDayName) {
+    ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].forEach(day => {
+      progress[day] = 0;
+    });
+  } else {
+    for (let i = 0; i < (type === '15days' ? 15 : 30); i++) {
+      const date = new Date(startDate);
+      date.setDate(startDate.getDate() + i);
+      const key = date.toISOString().split('T')[0]; // YYYY-MM-DD
+      progress[key] = 0;
+    }
+  }
 
+  // Tally history into the progress object
   history.forEach(entry => {
-    const day = new Date(entry.created_at).toLocaleDateString('en-US', { weekday: 'long' });
-    progress[day]++;
-
-    const desc = entry.edit_description?.toLowerCase() || "";
-
-    if (desc.includes('submitted document for indexing')) documents_indexed++;
-    else if (desc.includes('opened the document')) documents_viewed++;
-    else if (desc.includes('changed') || desc.includes('edited')) documents_changed++;
-    else if (desc.includes('published')) documents_published++;
+    const date = new Date(entry.created_at);
+    const key = groupByDayName
+      ? date.toLocaleDateString('en-US', { weekday: 'long' })
+      : date.toISOString().split('T')[0]; // YYYY-MM-DD
+    if (progress[key] !== undefined) {
+      progress[key]++;
+    }
   });
 
   res.json({
