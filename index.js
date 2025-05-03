@@ -1199,11 +1199,13 @@ app.post('/generate-invoices', async (req, res) => {
         document_uploaded: docUploaded,
         upload_amount,
         invoice_submitted: false,
-        owner_name: company.admin_name,
+        owner_name: company.admin_name ? company.admin_name : company.name,
         is_submitted: false,
         last_date: nextDueDate.toISOString()
       })
       .select();
+
+      console.log(invoiceInsertError)
 
     if (invoiceInsertError) {
       results.push({ company: company.name, status: 'Invoice creation failed' });
