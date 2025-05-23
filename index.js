@@ -1040,7 +1040,7 @@ app.delete('/client-plans/:id', authenticateToken, async (req, res) => {
 
   const { data: clients, error: fetchError } = await supabase
     .from('clients')
-    .select('id, name, status, contact_email')
+    .select('id, name, status, email')
     .eq('plan_id', planId)
     .eq('company_id', companyId);
 
@@ -1052,7 +1052,7 @@ app.delete('/client-plans/:id', authenticateToken, async (req, res) => {
       clients: clients.map(client => ({
         client_name: client.name,
         status: client.status,
-        contact_email: client.contact_email || 'N/A'
+        contact_email: client.email || 'N/A'
       }))
     });
   }
