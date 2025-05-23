@@ -165,10 +165,36 @@ app.put('/plans/:id', async (req, res) => {
 });
 
 app.delete('/plans/:id', async (req, res) => {
-  const { error } = await supabase.from('plans').delete().eq('id', req.params.id);
-  if (error) return res.status(400).json(error);
-  res.sendStatus(204);
+  const planId = req.params.id;
+
+  const { data: companies, error: fetchError } = await supabase
+    .from('companies')
+    .select('id, name, contact_email, admin_name')
+    .eq('plan_id', planId);
+
+  if (fetchError) return res.status(400).json(fetchError);
+
+  if (companies.length > 0) {
+    return res.status(409).json({
+      message: 'Cannot delete plan. The following companies are currently using this plan.',
+      companies: companies.map(company => ({
+        company_name: company.name,
+        admin_name: company.admin_name,
+        contact_email: company.contact_email
+      }))
+    });
+  }
+
+  const { error: deleteError } = await supabase
+    .from('plans')
+    .delete()
+    .eq('id', planId);
+
+  if (deleteError) return res.status(400).json(deleteError);
+
+  res.status(200).json({ message: 'Plan successfully deleted.' });
 });
+
 
 app.get('/get-plan-information', authenticateToken, async (req, res) => {
   const { userId, companyId, role } = req.user;
@@ -1010,18 +1036,39 @@ app.put('/client-plans/:id', authenticateToken, async (req, res) => {
 // Delete a plan
 app.delete('/client-plans/:id', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
+  const planId = req.params.id;
 
-  const { error } = await supabase
-    .from('client_plans')
-    .delete()
-    .eq('id', req.params.id)
+  const { data: clients, error: fetchError } = await supabase
+    .from('clients')
+    .select('id, name, status, contact_email')
+    .eq('plan_id', planId)
     .eq('company_id', companyId);
 
-  if (error) return res.status(400).json(error);
-  res.sendStatus(204);
+  if (fetchError) return res.status(400).json(fetchError);
+
+  if (clients.length > 0) {
+    return res.status(409).json({
+      message: 'Cannot delete plan. The following clients are currently using this plan.',
+      clients: clients.map(client => ({
+        client_name: client.name,
+        status: client.status,
+        contact_email: client.contact_email || 'N/A'
+      }))
+    });
+  }
+
+  const { error: deleteError } = await supabase
+    .from('client_plans')
+    .delete()
+    .eq('id', planId)
+    .eq('company_id', companyId);
+
+  if (deleteError) return res.status(400).json(deleteError);
+
+  res.status(200).json({ message: 'Client plan successfully deleted.' });
 });
 
-// Get all clients for the current user's company
+
 app.get('/clients', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
   const { data, error } = await supabase
