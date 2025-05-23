@@ -217,7 +217,7 @@ app.get('/get-plan-information', authenticateToken, async (req, res) => {
 
     planId = client.plan_id;
     planTable = 'client_plans';
-    planFields = 'can_download, can_share, can_view_reports, can_view_activity_logs';
+    planFields = 'can_download, can_share, can_view_reports, can_view_activity_logs, can_view_chat';
   } else {
     const { data: company, error: companyError } = await supabase
       .from('companies')
@@ -231,7 +231,7 @@ app.get('/get-plan-information', authenticateToken, async (req, res) => {
 
     planId = company.plan_id;
     planTable = 'plans';
-    planFields = 'can_share_document, can_view_activity_logs, can_add_client, number_of_clients, can_view_reports, allow_multiple_uploads';
+    planFields = 'can_share_document, can_view_activity_logs, can_add_client, number_of_clients, can_view_reports, allow_multiple_uploads, can_view_chat';
   }
 
   const { data: plan, error: planError } = await supabase
