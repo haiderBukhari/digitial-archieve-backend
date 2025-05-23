@@ -175,7 +175,7 @@ app.delete('/plans/:id', async (req, res) => {
   if (fetchError) return res.status(400).json(fetchError);
 
   if (companies.length > 0) {
-    return res.status(409).json({
+    return res.status(400).json({
       message: 'Cannot delete plan. The following companies are currently using this plan.',
       companies: companies.map(company => ({
         company_name: company.name,
@@ -1047,7 +1047,7 @@ app.delete('/client-plans/:id', authenticateToken, async (req, res) => {
   if (fetchError) return res.status(400).json(fetchError);
 
   if (clients.length > 0) {
-    return res.status(409).json({
+    return res.status(400).json({
       message: 'Cannot delete plan. The following clients are currently using this plan.',
       clients: clients.map(client => ({
         client_name: client.name,
@@ -1067,7 +1067,6 @@ app.delete('/client-plans/:id', authenticateToken, async (req, res) => {
 
   res.status(200).json({ message: 'Client plan successfully deleted.' });
 });
-
 
 app.get('/clients', authenticateToken, async (req, res) => {
   const companyId = req.user.companyId;
