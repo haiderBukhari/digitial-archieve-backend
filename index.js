@@ -2424,28 +2424,50 @@ app.put('/disputes/:id/resolve', authenticateToken, async (req, res) => {
 
 app.get('/stats', async (req, res) => {
   try {
-    // 1. Get all invoices
+    // 1. Get all invoices (generic)
     const { data: invoices, error: invoiceError } = await supabase
       .from('invoices')
       .select('invoice_value');
 
-    if (invoiceError) return res.status(400).json({ error: 'Failed to fetch invoices', details: invoiceError });
+    if (invoiceError) {
+      return res.status(400).json({ error: 'Failed to fetch invoices', details: invoiceError });
+    }
 
-    const totalInvoiceAmount = invoices.reduce((sum, inv) => sum + parseFloat(inv.invoice_value || 0), 0);
+    const totalInvoiceAmountFromInvoices = invoices.reduce(
+      (sum, inv) => sum + parseFloat(inv.invoice_value || 0),
+      0
+    );
 
-    // 2. Get all documents
+    // 2. Get custom_invoices where isclient = false
+    const { data: customInvoices, error: customError } = await supabase
+      .from('custom_invoices')
+      .select('total')
+      .eq('is_client', false);
+
+    if (customError) {
+      return res.status(400).json({ error: 'Failed to fetch custom invoices', details: customError });
+    }
+
+    const totalInvoiceAmountFromCustom = customInvoices.reduce(
+      (sum, inv) => sum + parseFloat(inv.total || 0),
+      0
+    );
+
+    // 3. Get documents
     const { data: documents, error: docError } = await supabase
       .from('documents')
       .select('is_published');
 
-    if (docError) return res.status(400).json({ error: 'Failed to fetch documents', details: docError });
+    if (docError) {
+      return res.status(400).json({ error: 'Failed to fetch documents', details: docError });
+    }
 
     const totalDocumentsUploaded = documents.length;
     const totalDocumentsPublished = documents.filter(doc => doc.is_published === true).length;
 
-    // 3. Return system-wide stats
+    // 4. Return combined stats
     res.status(200).json({
-      totalInvoiceAmount: totalInvoiceAmount.toFixed(2),
+      totalInvoiceAmount: (totalInvoiceAmountFromInvoices + totalInvoiceAmountFromCustom).toFixed(2),
       totalDocumentsUploaded,
       totalDocumentsPublished
     });
@@ -2458,36 +2480,53 @@ app.get('/stats', async (req, res) => {
 app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
   const { companyId } = req.user;
 
-  // Step 1: Get all clients under the company
-  const { data: clients, error: clientError } = await supabase
-    .from('clients')
-    .select('id, name, email, document_downloaded')
+  // Fetch client_invoices
+  const { data: invoices, error: error1 } = await supabase
+    .from('client_invoices')
+    .select('invoice_value, invoice_submitted, document_downloaded, company_name, owner_name, email')
     .eq('company_id', companyId);
 
-  if (clientError) {
-    return res.status(400).json({ error: 'Failed to fetch clients', clientError });
+  // Fetch custom_invoices
+  const { data: customInvoices, error: error2 } = await supabase 
+    .from('custom_invoices')
+    .select('total, invoice_submitted')
+    .eq('company_id', companyId)
+    .eq('is_client', true);
+
+  if (error1 || error2) {
+    return res.status(400).json({ error: 'Failed to fetch invoices', details: [error1, error2] });
   }
 
+  // Initialize totals
   let totalInvoiceValue = 0;
-  let totalInvoicesPaid = 0;
   let totalPaidAmount = 0;
+  let totalInvoicesPaid = 0;
   let totalDocumentsDownloaded = 0;
+  const clients = [];
 
-  const clientEmails = clients.map(client => client.email);
+  // Process client_invoices
+  for (const invoice of invoices) {
+    const value = Number(invoice.invoice_value) || 0;
+    const docs = Number(invoice.document_downloaded) || 0;
 
-  // Step 2: Fetch all invoices using client emails
-  const { data: invoices, error: invoiceError } = await supabase
-    .from('client_invoices')
-    .select('invoice_value, invoice_submitted, email')
-    .in('email', clientEmails);
+    totalInvoiceValue += value;
+    totalDocumentsDownloaded += docs;
 
-  if (invoiceError) {
-    return res.status(400).json({ error: 'Failed to fetch invoices', invoiceError });
+    if (invoice.invoice_submitted) {
+      totalInvoicesPaid++;
+      totalPaidAmount += value;
+    }
+
+    clients.push({
+      company_name: invoice.company_name || "N/A",
+      owner_name: invoice.owner_name || "N/A",
+      email: invoice.email || "N/A"
+    });
   }
 
-  // Step 3: Aggregate values
-  for (const invoice of invoices) {
-    const value = parseFloat(invoice.invoice_value || 0);
+  // Process custom_invoices
+  for (const invoice of customInvoices) {
+    const value = Number(invoice.total) || 0;
     totalInvoiceValue += value;
 
     if (invoice.invoice_submitted) {
@@ -2496,21 +2535,15 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
     }
   }
 
-  for (const client of clients) {
-    totalDocumentsDownloaded += client.document_downloaded || 0;
-  }
-
+  // Return metrics
   res.status(200).json({
     totalInvoiceValue: totalInvoiceValue.toFixed(2),
     totalInvoicesPaid: totalPaidAmount.toFixed(2),
     totalDocumentsDownloaded,
-    clients: clients.map(c => ({
-      id: c.id,
-      name: c.name,
-      email: c.email
-    }))
+    clients
   });
 });
+
 
 app.get('/invoice-preview', authenticateToken, async (req, res) => {
   const { companyId } = req.user;
