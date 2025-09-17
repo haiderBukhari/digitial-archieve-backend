@@ -551,11 +551,12 @@ app.get('/get-document-tags', authenticateToken, async (req, res) => {
 
 // Create folder
 app.post('/create-folder', authenticateToken, verifyStructure(['name']), async (req, res) => {
-  const { name } = req.body;
+  const { title, properties } = req.body;
   const company_id = req.user.companyId;
 
   const { data, error } = await supabase.from('folders').insert([{
-    name,
+    title,
+    properties,
     company_id
   }]).select();
 
@@ -592,12 +593,12 @@ app.get('/get-folders', authenticateToken, async (req, res) => {
 // Update folder
 app.put('/update-folder/:id', authenticateToken, verifyStructure(['name']), async (req, res) => {
   const { id } = req.params;
-  const { name } = req.body;
+  const { title, properties } = req.body;
   const company_id = req.user.companyId;
 
   const { data, error } = await supabase
     .from('folders')
-    .update({ name })
+    .update({ title, properties })
     .eq('id', id)
     .eq('company_id', company_id)
     .select();
