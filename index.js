@@ -487,6 +487,233 @@ app.get('/document-tags', authenticateToken, async (req, res) => {
   res.json(enrichedTags);
 });
 
+// Create document tag with folder_id
+app.post('/create-document-tags', authenticateToken, verifyStructure(['title', 'properties', 'folder_id']), async (req, res) => {
+  const { title, properties, folder_id } = req.body;
+  const company_id = req.user.companyId;
+
+  const { data, error } = await supabase.from('document_tags').insert([{
+    title,
+    properties,
+    folder_id,
+    company_id
+  }]).select();
+
+  if (error) return res.status(400).json(error);
+  res.status(201).json(data);
+});
+
+// Get document tags by folder_id
+app.get('/get-document-tags', authenticateToken, async (req, res) => {
+  const company_id = req.user.companyId;
+  const { folder_id } = req.query;
+
+  if (!company_id) {
+    return res.status(400).json({ error: 'Missing company ID in token.' });
+  }
+
+  if (!folder_id) {
+    return res.status(400).json({ error: 'Missing folder_id parameter.' });
+  }
+
+  const { data: tags, error: tagError } = await supabase
+    .from('document_tags')
+    .select('*')
+    .eq('company_id', company_id)
+    .eq('folder_id', folder_id);
+
+  if (tagError) return res.status(400).json(tagError);
+
+  const enrichedTags = await Promise.all(tags.map(async (tag) => {
+    if (!tag.id) return { ...tag, complete_documents: 0, incomplete_documents: 0 };
+
+    const { count: complete_documents } = await supabase
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('tag_id', tag.id)
+      .eq('is_published', true);
+
+    const { count: incomplete_documents } = await supabase
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('tag_id', tag.id)
+      .eq('is_published', false);
+
+    return {
+      ...tag,
+      complete_documents: complete_documents || 0,
+      incomplete_documents: incomplete_documents || 0,
+    };
+  }));
+
+  res.json(enrichedTags);
+});
+
+// Create folder
+app.post('/create-folder', authenticateToken, verifyStructure(['name']), async (req, res) => {
+  const { name } = req.body;
+  const company_id = req.user.companyId;
+
+  const { data, error } = await supabase.from('folders').insert([{
+    name,
+    company_id
+  }]).select();
+
+  if (error) return res.status(400).json(error);
+  res.status(201).json(data);
+});
+
+// Get all folders for a company
+app.get('/get-folders', authenticateToken, async (req, res) => {
+  const company_id = req.user.companyId;
+
+  if (!company_id) {
+    return res.status(400).json({ error: 'Missing company ID in token.' });
+  }
+
+  const { data: folders, error: folderError } = await supabase
+    .from('folders')
+    .select(`
+      *,
+      document_tags (
+        id,
+        title,
+        properties
+      )
+    `)
+    .eq('company_id', company_id)
+    .order('created_at', { ascending: false });
+
+  if (folderError) return res.status(400).json(folderError);
+
+  res.json(folders);
+});
+
+// Update folder
+app.put('/update-folder/:id', authenticateToken, verifyStructure(['name']), async (req, res) => {
+  const { id } = req.params;
+  const { name } = req.body;
+  const company_id = req.user.companyId;
+
+  const { data, error } = await supabase
+    .from('folders')
+    .update({ name })
+    .eq('id', id)
+    .eq('company_id', company_id)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  if (!data || data.length === 0) {
+    return res.status(404).json({ error: 'Folder not found or access denied.' });
+  }
+
+  res.json(data[0]);
+});
+
+// Delete folder
+app.delete('/delete-folder/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const company_id = req.user.companyId;
+
+  // First check if folder exists and belongs to company
+  const { data: folder, error: folderError } = await supabase
+    .from('folders')
+    .select('id')
+    .eq('id', id)
+    .eq('company_id', company_id)
+    .single();
+
+  if (folderError || !folder) {
+    return res.status(404).json({ error: 'Folder not found or access denied.' });
+  }
+
+  // Delete all document tags in this folder first
+  const { error: tagsError } = await supabase
+    .from('document_tags')
+    .delete()
+    .eq('folder_id', id);
+
+  if (tagsError) {
+    return res.status(400).json({ error: 'Failed to delete document tags in folder.' });
+  }
+
+  // Delete the folder
+  const { error: deleteError } = await supabase
+    .from('folders')
+    .delete()
+    .eq('id', id)
+    .eq('company_id', company_id);
+
+  if (deleteError) return res.status(400).json(deleteError);
+
+  res.json({ message: 'Folder deleted successfully.' });
+});
+
+// Update document tag
+app.put('/update-document-tag/:id', authenticateToken, verifyStructure(['title', 'properties']), async (req, res) => {
+  const { id } = req.params;
+  const { title, properties, folder_id } = req.body;
+  const company_id = req.user.companyId;
+
+  const updateData = { title, properties };
+  if (folder_id) {
+    updateData.folder_id = folder_id;
+  }
+
+  const { data, error } = await supabase
+    .from('document_tags')
+    .update(updateData)
+    .eq('id', id)
+    .eq('company_id', company_id)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  if (!data || data.length === 0) {
+    return res.status(404).json({ error: 'Document tag not found or access denied.' });
+  }
+
+  res.json(data[0]);
+});
+
+// Delete document tag
+app.delete('/delete-document-tag/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const company_id = req.user.companyId;
+
+  // First check if tag exists and belongs to company
+  const { data: tag, error: tagError } = await supabase
+    .from('document_tags')
+    .select('id')
+    .eq('id', id)
+    .eq('company_id', company_id)
+    .single();
+
+  if (tagError || !tag) {
+    return res.status(404).json({ error: 'Document tag not found or access denied.' });
+  }
+
+  // Check if any documents are using this tag
+  const { count: documentCount } = await supabase
+    .from('documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('tag_id', id);
+
+  if (documentCount > 0) {
+    return res.status(400).json({ error: 'Cannot delete tag. Documents are still using this tag.' });
+  }
+
+  // Delete the document tag
+  const { error: deleteError } = await supabase
+    .from('document_tags')
+    .delete()
+    .eq('id', id)
+    .eq('company_id', company_id);
+
+  if (deleteError) return res.status(400).json(deleteError);
+
+  res.json({ message: 'Document tag deleted successfully.' });
+});
+
 app.put('/document-tags/:id', async (req, res) => {
   const { data, error } = await supabase.from('document_tags').update(req.body).eq('id', req.params.id).select();
   if (error) return res.status(400).json(error);
