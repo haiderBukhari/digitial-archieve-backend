@@ -550,7 +550,7 @@ app.get('/get-document-tags', authenticateToken, async (req, res) => {
 });
 
 // Create folder
-app.post('/create-folder', authenticateToken, verifyStructure(['name']), async (req, res) => {
+app.post('/create-folder', authenticateToken, async (req, res) => {
   const { title, properties } = req.body;
   const company_id = req.user.companyId;
 
@@ -591,7 +591,7 @@ app.get('/get-folders', authenticateToken, async (req, res) => {
 });
 
 // Update folder
-app.put('/update-folder/:id', authenticateToken, verifyStructure(['name']), async (req, res) => {
+app.put('/update-folder/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { title, properties } = req.body;
   const company_id = req.user.companyId;
