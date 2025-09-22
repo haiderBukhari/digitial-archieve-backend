@@ -3058,4 +3058,123 @@ app.get('/custom-invoice/:id', authenticateToken, async (req, res) => {
   res.json(data);
 });
 
+// Storage Management APIs
+app.post('/update-storage', authenticateToken, async (req, res) => {
+  const company_id = req.user.companyId;
+  const { mb_to_add } = req.body;
+
+  if (!company_id) {
+    return res.status(400).json({ error: 'Missing company ID in token.' });
+  }
+
+  if (!mb_to_add || typeof mb_to_add !== 'number' || mb_to_add < 0) {
+    return res.status(400).json({ error: 'Invalid mb_to_add value. Must be a positive number.' });
+  }
+
+  // Get current storage usage
+  const { data: currentCompany, error: fetchError } = await supabase
+    .from('companies')
+    .select('storage_used')
+    .eq('id', company_id)
+    .single();
+
+  if (fetchError) {
+    return res.status(400).json({ error: 'Failed to fetch current storage usage.' });
+  }
+
+  const currentStorage = currentCompany.storage_used || 0;
+  const newStorage = currentStorage + mb_to_add;
+
+  // Update storage_used in companies table (add to existing)
+  const { data, error } = await supabase
+    .from('companies')
+    .update({ storage_used: newStorage })
+    .eq('id', company_id)
+    .select();
+
+  if (error) {
+    return res.status(400).json({ error: 'Failed to update storage usage.' });
+  }
+
+  res.json({ 
+    message: 'Storage usage updated successfully.',
+    company_id,
+    previous_storage: currentStorage,
+    added_storage: mb_to_add,
+    new_total_storage: newStorage
+  });
+});
+
+app.get('/get-storage-usage', async (req, res) => {
+  const { companyId } = req.query;
+
+  if (!companyId) {
+    return res.status(400).json({ error: 'Missing companyId query parameter.' });
+  }
+
+  // Get company with plan information
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select(`
+      storage_used,
+      plan_id,
+      plans (
+        storage_limit_gb
+      )
+    `)
+    .eq('id', companyId)
+    .single();
+
+  if (companyError) {
+    return res.status(400).json({ error: 'Failed to fetch company information.' });
+  }
+
+  const storageUsedMB = company.storage_used || 0;
+  const storageLimitGB = company.plans?.storage_limit_gb || 0;
+  const storageLimitMB = storageLimitGB * 1024; // Convert GB to MB
+
+  res.json({
+    company_id: companyId,
+    storage_used_mb: storageUsedMB,
+    storage_limit_mb: storageLimitMB,
+    storage_limit_gb: storageLimitGB
+  });
+});
+
+app.get('/get-storage', authenticateToken, async (req, res) => {
+  const company_id = req.user.companyId;
+
+  if (!company_id) {
+    return res.status(400).json({ error: 'Missing company ID in token.' });
+  }
+
+  // Get company with plan information
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select(`
+      storage_used,
+      plan_id,
+      plans (
+        storage_limit_gb
+      )
+    `)
+    .eq('id', company_id)
+    .single();
+
+  if (companyError) {
+    return res.status(400).json({ error: 'Failed to fetch company information.' });
+  }
+
+  const storageUsedMB = company.storage_used || 0;
+  const storageLimitGB = company.plans?.storage_limit_gb || 0;
+  const storageLimitMB = storageLimitGB * 1024; // Convert GB to MB
+
+  res.json({
+    company_id,
+    storage_used_mb: storageUsedMB,
+    storage_limit_mb: storageLimitMB,
+    storage_limit_gb: storageLimitGB
+  });
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
