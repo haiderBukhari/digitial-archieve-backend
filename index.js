@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import jwt from 'jsonwebtoken'
 import cors from 'cors'
+import fs from 'fs'
 
 config();
 
@@ -809,7 +810,8 @@ app.get('/documents', authenticateToken, async (req, res) => {
   } else if (roleLower === 'indexer') {
     query = query.eq('company_id', companyId).eq('indexer_passed_id', userId);
   } else if (roleLower === 'qa') {
-    query = query.eq('company_id', companyId).eq('qa_passed_id', userId);
+    // Show documents specifically assigned to this QA OR documents in Review stage (progress_number: 2) that are not yet assigned
+    query = query.eq('company_id', companyId).or(`qa_passed_id.eq.${userId},and(qa_passed_id.is.null,progress_number.eq.2)`);
   } else if (roleLower === 'client') {
     query = query.eq('company_id', companyId).eq('added_by', userId);
   } else {
@@ -818,7 +820,17 @@ app.get('/documents', authenticateToken, async (req, res) => {
 
   // 📄 Fetch documents
   const { data: documents, error } = await query;
+
   if (error) return res.status(400).json(error);
+
+  // 🏢 Fetch company indexing setting
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select('needs_indexing')
+    .eq('id', companyId)
+    .single();
+
+  const needsIndexing = company?.needs_indexing ?? true;
 
   // 👤 Fetch users and clients
   const { data: users, error: userError } = await supabase.from('users').select('id, name, role');
@@ -852,7 +864,8 @@ app.get('/documents', authenticateToken, async (req, res) => {
     return {
       ...doc,
       added_by_user: addedBy,
-      requested_by: requestedBy
+      requested_by: requestedBy,
+      needs_indexing: needsIndexing
     };
   });
 
@@ -1107,11 +1120,23 @@ app.post('/document-history', authenticateToken, verifyStructure(['document_id',
 app.get('/get-assignee', authenticateToken, async (req, res) => {
   const { companyId } = req.user;
   const role = req.user.role.toLowerCase();
+  const requestedRole = req.query.role;
 
   let targetRole;
 
   if (role === 'owner' || role === 'manager' || role === 'scanner' || role === 'client') {
-    targetRole = 'indexer';
+    if (requestedRole) {
+      targetRole = requestedRole;
+    } else {
+      // Fetch company setting to determine default target role
+      const { data: company } = await supabase
+        .from('companies')
+        .select('needs_indexing')
+        .eq('id', companyId)
+        .single();
+
+      targetRole = company?.needs_indexing !== false ? 'indexer' : 'qa';
+    }
   } else if (role === 'indexer') {
     targetRole = 'qa';
   } else {
@@ -1145,13 +1170,35 @@ app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'a
 
   if (docError || !doc) return res.status(404).json({ error: 'Document not found for this company.' });
 
+  const { data: assignee, error: assigneeError } = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', assignee_id)
+    .single();
+
+  if (assigneeError || !assignee) return res.status(404).json({ error: 'Assignee not found.' });
+
+  const assigneeRole = assignee.role.toLowerCase();
   let updateFields = { passed_to: assignee_id };
 
   if (role.toLowerCase() === 'owner' || role.toLowerCase() === 'manager' || role.toLowerCase() === 'scanner' || role.toLowerCase() === 'client') {
-    updateFields.indexer_passed_id = assignee_id;
+    if (assigneeRole === 'indexer') {
+      updateFields.indexer_passed_id = assignee_id;
+      updateFields.progress_number = 1; // Stage 1 tracking
+    } else if (assigneeRole === 'qa') {
+      updateFields.qa_passed_id = assignee_id;
+      updateFields.progress_number = 2; // Jump to Review stage
+      updateFields.indexer_passed_id = null; // Ensure no indexer is associated
+    } else {
+      return res.status(400).json({ error: 'Invalid assignee role for this submission.' });
+    }
   } else if (role.toLowerCase() === 'indexer') {
-    updateFields.qa_passed_id = assignee_id;
-    updateFields.progress_number = 2;
+    if (assigneeRole === 'qa') {
+      updateFields.qa_passed_id = assignee_id;
+      updateFields.progress_number = 2;
+    } else {
+      return res.status(400).json({ error: 'Indexers can only submit to QA.' });
+    }
   } else {
     return res.status(403).json({ error: 'You are not allowed to assign from your role.' });
   }
@@ -1479,7 +1526,7 @@ app.post('/generate-invoices', async (req, res) => {
       })
       .select();
 
-      console.log(invoiceInsertError)
+    console.log(invoiceInsertError)
 
     if (invoiceInsertError) {
       results.push({ company: company.name, status: 'Invoice creation failed' });
@@ -2513,11 +2560,42 @@ app.get('/document-progress', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'Invalid type. Must be one of: week, 15days, month.' });
   }
 
-  // Fetch edit history since the determined start date
-  const { data: history, error } = await supabase
-    .from('document_edit_history')
-    .select('created_at, edit_description')
-    .eq('edited_by', userId)
+  let query = supabase.from('document_edit_history').select('created_at, edit_description');
+
+  const roleLower = req.user.role.toLowerCase();
+  const companyId = req.user.companyId;
+
+  if (roleLower === 'owner' || roleLower === 'manager') {
+    // 1. Get all documents for this company
+    const { data: companyDocs } = await supabase
+      .from('documents')
+      .select('id')
+      .eq('company_id', companyId);
+
+    const docIds = (companyDocs || []).map(d => d.id);
+
+    if (docIds.length > 0) {
+      query = query.in('document_id', docIds);
+    } else {
+      // Return empty if no documents in company
+      return res.json({
+        userId,
+        progress: {},
+        summary: {
+          documents_indexed: 0,
+          documents_viewed: 0,
+          documents_changed: 0,
+          documents_published: 0
+        }
+      });
+    }
+  } else {
+    // Other roles see their personal progress
+    query = query.eq('edited_by', userId);
+  }
+
+  // Fetch history since the determined start date
+  const { data: history, error } = await query
     .gte('created_at', startDate.toISOString());
 
   if (error) return res.status(400).json(error);
@@ -2650,12 +2728,14 @@ app.put('/disputes/:id/resolve', authenticateToken, async (req, res) => {
   res.status(200).json({ message: 'Dispute marked as resolved.', data });
 });
 
-app.get('/stats', async (req, res) => {
+app.get('/stats', authenticateToken, async (req, res) => {
+  const { companyId } = req.user;
   try {
-    // 1. Get all invoices (generic)
+    // 1. Get all invoices for this company
     const { data: invoices, error: invoiceError } = await supabase
       .from('invoices')
-      .select('invoice_value');
+      .select('invoice_value')
+      .eq('company_id', companyId);
 
     if (invoiceError) {
       return res.status(400).json({ error: 'Failed to fetch invoices', details: invoiceError });
@@ -2666,10 +2746,11 @@ app.get('/stats', async (req, res) => {
       0
     );
 
-    // 2. Get custom_invoices where isclient = false
+    // 2. Get custom_invoices where isclient = false for this company
     const { data: customInvoices, error: customError } = await supabase
       .from('custom_invoices')
       .select('total')
+      .eq('company_id', companyId)
       .eq('is_client', false);
 
     if (customError) {
@@ -2681,10 +2762,11 @@ app.get('/stats', async (req, res) => {
       0
     );
 
-    // 3. Get documents
+    // 3. Get documents for this company
     const { data: documents, error: docError } = await supabase
       .from('documents')
-      .select('is_published');
+      .select('is_published')
+      .eq('company_id', companyId);
 
     if (docError) {
       return res.status(400).json({ error: 'Failed to fetch documents', details: docError });
@@ -2715,7 +2797,7 @@ app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
     .eq('company_id', companyId);
 
   // Fetch custom_invoices
-  const { data: customInvoices, error: error2 } = await supabase 
+  const { data: customInvoices, error: error2 } = await supabase
     .from('custom_invoices')
     .select('total, invoice_submitted')
     .eq('company_id', companyId)
@@ -3096,7 +3178,7 @@ app.post('/update-storage', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'Failed to update storage usage.' });
   }
 
-  res.json({ 
+  res.json({
     message: 'Storage usage updated successfully.',
     company_id,
     previous_storage: currentStorage,
