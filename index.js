@@ -365,7 +365,7 @@ app.get('/client/:id', async (req, res) => {
 });
 
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
-  const { name, contact_email, password_hash, plan_id, admin_name } = req.body;
+  const { name, contact_email, password_hash, plan_id, admin_name, logo_url } = req.body;
 
   // Step 1: Check for existing company
   const { data: existingCompany, error: checkError } = await supabase
@@ -392,7 +392,7 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
   // Step 3: Insert company
   const { data: companyData, error: createError } = await supabase
     .from('companies')
-    .insert([{ name, contact_email, password_hash, plan_id, admin_name }])
+    .insert([{ name, contact_email, password_hash, plan_id, admin_name, logo_url: logo_url || null }])
     .select();
 
   if (createError) return res.status(400).json(createError);
