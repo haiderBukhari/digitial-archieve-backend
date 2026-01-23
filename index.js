@@ -956,14 +956,14 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   res.status(201).json(insertedDoc);
 });
 
-// Get deleted documents (owner only) - MUST come before /documents/:id route
+// Get deleted documents (owner, manager, qa) - MUST come before /documents/:id route
 app.get('/documents/deleted', authenticateToken, async (req, res) => {
   const { companyId, role } = req.user;
   const roleLower = role.toLowerCase();
 
-  // Only owners can view deleted documents
-  if (roleLower !== 'owner') {
-    return res.status(403).json({ error: 'Only owners can view deleted documents.' });
+  // Only owners, managers, and QA can view deleted documents
+  if (!['owner', 'manager', 'qa'].includes(roleLower)) {
+    return res.status(403).json({ error: 'Only owners, managers, and QA can view deleted documents.' });
   }
 
   // Fetch deleted documents
@@ -1092,15 +1092,15 @@ app.put('/documents/:id', async (req, res) => {
 });
 
 
-// Soft delete document (owner only)
+// Soft delete document (owner, manager, qa)
 app.delete('/documents/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { companyId, role } = req.user;
   const roleLower = role.toLowerCase();
 
-  // Only owners can delete documents
-  if (roleLower !== 'owner') {
-    return res.status(403).json({ error: 'Only owners can delete documents.' });
+  // Only owners, managers, and QA can delete documents
+  if (!['owner', 'manager', 'qa'].includes(roleLower)) {
+    return res.status(403).json({ error: 'Only owners, managers, and QA can delete documents.' });
   }
 
   // First check if document exists and belongs to company
@@ -1132,15 +1132,15 @@ app.delete('/documents/:id', authenticateToken, async (req, res) => {
   res.json({ message: 'Document deleted successfully.' });
 });
 
-// Restore deleted document (owner only)
+// Restore deleted document (owner, manager, qa)
 app.post('/documents/:id/restore', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { companyId, role } = req.user;
   const roleLower = role.toLowerCase();
 
-  // Only owners can restore documents
-  if (roleLower !== 'owner') {
-    return res.status(403).json({ error: 'Only owners can restore documents.' });
+  // Only owners, managers, and QA can restore documents
+  if (!['owner', 'manager', 'qa'].includes(roleLower)) {
+    return res.status(403).json({ error: 'Only owners, managers, and QA can restore documents.' });
   }
 
   // Check if document exists, belongs to company, and is deleted
@@ -1181,15 +1181,15 @@ app.post('/documents/:id/restore', authenticateToken, async (req, res) => {
   res.json({ message: 'Document restored successfully.', document: restoredDoc });
 });
 
-// Permanently delete document (owner only)
+// Permanently delete document (owner, manager, qa)
 app.delete('/documents/:id/permanent', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { companyId, role } = req.user;
   const roleLower = role.toLowerCase();
 
-  // Only owners can permanently delete documents
-  if (roleLower !== 'owner') {
-    return res.status(403).json({ error: 'Only owners can permanently delete documents.' });
+  // Only owners, managers, and QA can permanently delete documents
+  if (!['owner', 'manager', 'qa'].includes(roleLower)) {
+    return res.status(403).json({ error: 'Only owners, managers, and QA can permanently delete documents.' });
   }
 
   // Check if document exists, belongs to company, and is already soft-deleted
