@@ -818,6 +818,9 @@ app.get('/documents', authenticateToken, async (req, res) => {
     return res.status(403).json({ error: 'Unauthorized role access.' });
   }
 
+  // 🗑️ Exclude soft-deleted documents
+  query = query.is('deleted_at', null);
+
   // 📄 Fetch documents
   const { data: documents, error } = await query;
 
@@ -953,6 +956,46 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
   res.status(201).json(insertedDoc);
 });
 
+// Get deleted documents (owner only) - MUST come before /documents/:id route
+app.get('/documents/deleted', authenticateToken, async (req, res) => {
+  const { companyId, role } = req.user;
+  const roleLower = role.toLowerCase();
+
+  // Only owners can view deleted documents
+  if (roleLower !== 'owner') {
+    return res.status(403).json({ error: 'Only owners can view deleted documents.' });
+  }
+
+  // Fetch deleted documents
+  const { data: documents, error } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('company_id', companyId)
+    .not('deleted_at', 'is', null)
+    .order('deleted_at', { ascending: false });
+
+  if (error) return res.status(400).json(error);
+
+  // Calculate days until permanent deletion and add to each document
+  const now = new Date();
+  const retentionDays = 60;
+  const enhancedDocs = documents.map(doc => {
+    const deletedAt = new Date(doc.deleted_at);
+    const daysSinceDeletion = Math.floor((now - deletedAt) / (1000 * 60 * 60 * 24));
+    const daysUntilPermanentDeletion = retentionDays - daysSinceDeletion;
+    const shouldAutoDelete = daysUntilPermanentDeletion <= 0;
+
+    return {
+      ...doc,
+      days_until_permanent_deletion: Math.max(0, daysUntilPermanentDeletion),
+      days_since_deletion: daysSinceDeletion,
+      should_auto_delete: shouldAutoDelete
+    };
+  });
+
+  res.json(enhancedDocs);
+});
+
 app.get('/documents/:id', authenticateToken, async (req, res) => {
   const documentId = req.params.id;
   const currentUserId = req.user.userId;
@@ -1049,10 +1092,132 @@ app.put('/documents/:id', async (req, res) => {
 });
 
 
-app.delete('/documents/:id', async (req, res) => {
-  const { error } = await supabase.from('documents').delete().eq('id', req.params.id);
-  if (error) return res.status(400).json(error);
-  res.sendStatus(204);
+// Soft delete document (owner only)
+app.delete('/documents/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId, role } = req.user;
+  const roleLower = role.toLowerCase();
+
+  // Only owners can delete documents
+  if (roleLower !== 'owner') {
+    return res.status(403).json({ error: 'Only owners can delete documents.' });
+  }
+
+  // First check if document exists and belongs to company
+  const { data: document, error: docError } = await supabase
+    .from('documents')
+    .select('id, company_id, deleted_at')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single();
+
+  if (docError || !document) {
+    return res.status(404).json({ error: 'Document not found or access denied.' });
+  }
+
+  // Check if already deleted
+  if (document.deleted_at) {
+    return res.status(400).json({ error: 'Document is already deleted.' });
+  }
+
+  // Soft delete by setting deleted_at timestamp
+  const { error: updateError } = await supabase
+    .from('documents')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('company_id', companyId);
+
+  if (updateError) return res.status(400).json(updateError);
+
+  res.json({ message: 'Document deleted successfully.' });
+});
+
+// Restore deleted document (owner only)
+app.post('/documents/:id/restore', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId, role } = req.user;
+  const roleLower = role.toLowerCase();
+
+  // Only owners can restore documents
+  if (roleLower !== 'owner') {
+    return res.status(403).json({ error: 'Only owners can restore documents.' });
+  }
+
+  // Check if document exists, belongs to company, and is deleted
+  const { data: document, error: docError } = await supabase
+    .from('documents')
+    .select('id, company_id, deleted_at')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single();
+
+  if (docError || !document) {
+    return res.status(404).json({ error: 'Document not found or access denied.' });
+  }
+
+  if (!document.deleted_at) {
+    return res.status(400).json({ error: 'Document is not deleted.' });
+  }
+
+  // Check if document is past retention period
+  const deletedAt = new Date(document.deleted_at);
+  const now = new Date();
+  const daysSinceDeletion = Math.floor((now - deletedAt) / (1000 * 60 * 60 * 24));
+  if (daysSinceDeletion > 60) {
+    return res.status(400).json({ error: 'Document cannot be restored. Retention period (60 days) has expired.' });
+  }
+
+  // Restore by setting deleted_at to null
+  const { data: restoredDoc, error: updateError } = await supabase
+    .from('documents')
+    .update({ deleted_at: null })
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select()
+    .single();
+
+  if (updateError) return res.status(400).json(updateError);
+
+  res.json({ message: 'Document restored successfully.', document: restoredDoc });
+});
+
+// Permanently delete document (owner only)
+app.delete('/documents/:id/permanent', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId, role } = req.user;
+  const roleLower = role.toLowerCase();
+
+  // Only owners can permanently delete documents
+  if (roleLower !== 'owner') {
+    return res.status(403).json({ error: 'Only owners can permanently delete documents.' });
+  }
+
+  // Check if document exists, belongs to company, and is already soft-deleted
+  const { data: document, error: docError } = await supabase
+    .from('documents')
+    .select('id, company_id, deleted_at')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single();
+
+  if (docError || !document) {
+    return res.status(404).json({ error: 'Document not found or access denied.' });
+  }
+
+  if (!document.deleted_at) {
+    return res.status(400).json({ error: 'Document must be soft-deleted before permanent deletion.' });
+  }
+
+  // Permanently delete from database
+  const { error: deleteError } = await supabase
+    .from('documents')
+    .delete()
+    .eq('id', id)
+    .eq('company_id', companyId);
+
+  if (deleteError) return res.status(400).json(deleteError);
+
+  res.json({ message: 'Document permanently deleted.' });
 });
 
 // -------------------------
