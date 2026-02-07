@@ -1147,7 +1147,7 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
   let showMore = false;
 
   if (document.added_by === currentUserId || role == 'manager' || role == 'owner') {
-    showMore = !document.passed_to; // true if not passed yet
+    showMore = !document.passed_to || document.status === 'rejected'; // true if not passed yet or rejected
   } else {
     if (document.indexer_passed_id === currentUserId || document.qa_passed_id === currentUserId) {
       showMore = (document.passed_to === document.indexer_passed_id || document.passed_to === document.qa_passed_id) && !document.is_published;
@@ -1479,7 +1479,11 @@ app.post('/post-assignee', authenticateToken, verifyStructure(['document_id', 'a
   if (assigneeError || !assignee) return res.status(404).json({ error: 'Assignee not found.' });
 
   const assigneeRole = assignee.role.toLowerCase();
-  let updateFields = { passed_to: assignee_id };
+  let updateFields = {
+    passed_to: assignee_id,
+    status: 'incomplete', // Clear rejected status on resubmission
+    progress: 'In Progress'
+  };
 
   if (role.toLowerCase() === 'owner' || role.toLowerCase() === 'manager' || role.toLowerCase() === 'scanner' || role.toLowerCase() === 'client') {
     if (assigneeRole === 'indexer') {
@@ -1549,6 +1553,62 @@ app.post('/publish', authenticateToken, verifyStructure(['document_id']), async 
 
   if (error) return res.status(400).json(error);
   res.status(200).json({ message: 'Document published successfully.', data });
+});
+
+app.post('/reject-document', authenticateToken, verifyStructure(['document_id', 'rejection_reason']), async (req, res) => {
+  const { document_id, rejection_reason } = req.body;
+  const { companyId, userId, role } = req.user;
+
+  // 1. Fetch document to get added_by and existing comments
+  const { data: document, error: docError } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('id', document_id)
+    .eq('company_id', companyId)
+    .single();
+
+  if (docError || !document) return res.status(404).json({ error: 'Document not found' });
+
+  // 2. Get current user's name for the comment
+  let userName = 'QA';
+  const { data: user } = await supabase
+    .from('users')
+    .select('name')
+    .eq('id', userId)
+    .single();
+  if (user) userName = user.name;
+
+  // 3. Prepare updated comments
+  const existingComments = document.comments || [];
+  const updatedComments = [
+    ...existingComments,
+    {
+      comment: `Document Rejected: ${rejection_reason}`,
+      added_by: userId,
+      role: role,
+      name: userName,
+      timestamp: new Date().toISOString()
+    }
+  ];
+
+  // 4. Update document status and return to uploader
+  const { data: updatedDoc, error: updateError } = await supabase
+    .from('documents')
+    .update({
+      status: 'rejected',
+      progress: 'Rejected',
+      progress_number: 1,
+      passed_to: document.added_by,
+      is_published: false,
+      comments: updatedComments
+    })
+    .eq('id', document_id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (updateError) return res.status(400).json(updateError);
+
+  res.status(200).json({ message: 'Document rejected successfully.', data: updatedDoc[0] });
 });
 
 // -------------------------
