@@ -729,6 +729,119 @@ app.delete('/document-tags/:id', async (req, res) => {
 });
 
 // -------------------------
+// 📁 NOTARIES
+// -------------------------
+
+// Create notary
+app.post('/notaries', authenticateToken, verifyStructure(['name']), async (req, res) => {
+  const { name } = req.body;
+  const company_id = req.user.companyId;
+
+  const { data, error } = await supabase.from('notaries').insert([{
+    name,
+    company_id
+  }]).select();
+
+  if (error) return res.status(400).json(error);
+  res.status(201).json(data);
+});
+
+// Get all notaries for a company
+app.get('/notaries', authenticateToken, async (req, res) => {
+  const company_id = req.user.companyId;
+
+  if (!company_id) {
+    return res.status(400).json({ error: 'Missing company ID in token.' });
+  }
+
+  const { data: notaries, error: notaryError } = await supabase
+    .from('notaries')
+    .select('*')
+    .eq('company_id', company_id)
+    .order('created_at', { ascending: false });
+
+  if (notaryError) return res.status(400).json(notaryError);
+
+  // Enrich with document count
+  const enrichedNotaries = await Promise.all(notaries.map(async (notary) => {
+    if (!notary.id) return { ...notary, document_count: 0 };
+
+    const { count: document_count } = await supabase
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('notary_id', notary.id);
+
+    return {
+      ...notary,
+      document_count: document_count || 0,
+    };
+  }));
+
+  res.json(enrichedNotaries);
+});
+
+// Update notary
+app.put('/notaries/:id', authenticateToken, verifyStructure(['name']), async (req, res) => {
+  const { id } = req.params;
+  const { name } = req.body;
+  const company_id = req.user.companyId;
+
+  const { data, error } = await supabase
+    .from('notaries')
+    .update({ name })
+    .eq('id', id)
+    .eq('company_id', company_id)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  if (!data || data.length === 0) {
+    return res.status(404).json({ error: 'Notary not found or access denied.' });
+  }
+
+  res.json(data[0]);
+});
+
+// Delete notary
+app.delete('/notaries/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const company_id = req.user.companyId;
+
+  // First check if notary exists and belongs to company
+  const { data: notary, error: notaryError } = await supabase
+    .from('notaries')
+    .select('id')
+    .eq('id', id)
+    .eq('company_id', company_id)
+    .single();
+
+  if (notaryError || !notary) {
+    return res.status(404).json({ error: 'Notary not found or access denied.' });
+  }
+
+  // Check if any documents are using this notary
+  const { count: documentCount } = await supabase
+    .from('documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('notary_id', id);
+
+  if (documentCount > 0) {
+    return res.status(400).json({ error: 'Cannot delete notary. Documents are still using this notary.' });
+  }
+
+  // Delete the notary
+  const { error: deleteError } = await supabase
+    .from('notaries')
+    .delete()
+    .eq('id', id)
+    .eq('company_id', company_id);
+
+  if (deleteError) return res.status(400).json(deleteError);
+
+  res.json({ message: 'Notary deleted successfully.' });
+});
+
+
+// -------------------------
 // 📁 USERS
 // -------------------------
 app.get('/users', authenticateToken, async (req, res) => {
@@ -835,11 +948,12 @@ app.get('/documents', authenticateToken, async (req, res) => {
 
   const needsIndexing = company?.needs_indexing ?? true;
 
-  // 👤 Fetch users and clients
+  // 👤 Fetch users, clients, and notaries
   const { data: users, error: userError } = await supabase.from('users').select('id, name, role');
   const { data: clients, error: clientError } = await supabase.from('clients').select('id, name');
+  const { data: notaries, error: notaryError } = await supabase.from('notaries').select('id, name').eq('company_id', companyId);
 
-  if (userError || clientError) return res.status(400).json(userError || clientError);
+  if (userError || clientError || notaryError) return res.status(400).json(userError || clientError || notaryError);
 
   const usersMap = {};
   users.forEach(u => {
@@ -848,6 +962,13 @@ app.get('/documents', authenticateToken, async (req, res) => {
   clients.forEach(c => {
     usersMap[c.id] = { name: c.name, role: 'Client' };
   });
+
+  const notariesMap = {};
+  if (notaries) {
+    notaries.forEach(n => {
+      notariesMap[n.id] = n.name;
+    });
+  }
 
   const enhancedDocs = documents.map(doc => {
     const addedBy = usersMap[doc.added_by] || null;
@@ -868,6 +989,7 @@ app.get('/documents', authenticateToken, async (req, res) => {
       ...doc,
       added_by_user: addedBy,
       requested_by: requestedBy,
+      notary_name: doc.notary_id ? notariesMap[doc.notary_id] : null,
       needs_indexing: needsIndexing
     };
   });
@@ -876,7 +998,7 @@ app.get('/documents', authenticateToken, async (req, res) => {
 });
 
 app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag_name', 'file_id']), async (req, res) => {
-  const { url, tag_id, tag_name, file_id, title } = req.body;
+  const { url, tag_id, tag_name, file_id, title, notary_id } = req.body;
   const company_id = req.user.companyId;
   const added_by = req.user.userId;
   const role = req.user.role;
@@ -902,7 +1024,8 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
     url,
     company_id,
     title: title,
-    progress: 'Incomplete',
+    progress: 'Draft',
+    status: 'draft',
     tag_id,
     progress_number: (['Owner', 'Manager', 'Client'].includes(role)) ? 1 : 1,
     indexer_passed_id: null,
@@ -913,7 +1036,8 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
     added_by,
     role,
     properties: propertiesWithValues,
-    file_id
+    file_id,
+    notary_id: notary_id || null
   };
 
   // 3. Insert document
@@ -1009,6 +1133,17 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
 
   if (error || !document) return res.status(404).json({ error: 'Document not found' });
 
+  // Fetch notary name if notary_id exists
+  let notary_name = null;
+  if (document.notary_id) {
+    const { data: notary } = await supabase
+      .from('notaries')
+      .select('name')
+      .eq('id', document.notary_id)
+      .single();
+    notary_name = notary?.name || null;
+  }
+
   let showMore = false;
 
   if (document.added_by === currentUserId || role == 'manager' || role == 'owner') {
@@ -1021,7 +1156,7 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
     }
   }
 
-  res.json({ ...document, showMore });
+  res.json({ ...document, notary_name, showMore });
 });
 
 app.put('/documents/:id/add-comment', authenticateToken, verifyStructure(['comment']), async (req, res) => {
@@ -1407,13 +1542,125 @@ app.post('/publish', authenticateToken, verifyStructure(['document_id']), async 
 
   const { data, error } = await supabase
     .from('documents')
-    .update({ progress_number: 3, is_published: true })
+    .update({ progress_number: 3, progress: 'Complete', status: 'complete', is_published: true })
     .eq('id', document_id)
     .eq('company_id', companyId)
     .select();
 
   if (error) return res.status(400).json(error);
   res.status(200).json({ message: 'Document published successfully.', data });
+});
+
+// -------------------------
+// 💾 SAVE DRAFT DOCUMENT
+// -------------------------
+app.post('/save-draft/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId } = req.user;
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update({ progress: 'Draft', status: 'draft' })
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Document saved as draft successfully.', data });
+});
+
+// -------------------------
+// 📤 SUBMIT TO QA (Change status from draft to incomplete)
+// -------------------------
+app.post('/submit-to-qa/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId } = req.user;
+  const { assignee_id } = req.body;
+
+  const updateData = {
+    progress: 'Incomplete',
+    status: 'incomplete',
+    progress_number: 2
+  };
+
+  if (assignee_id) {
+    updateData.passed_to = assignee_id;
+    updateData.qa_passed_id = assignee_id;
+  }
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update(updateData)
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Document submitted to QA successfully.', data });
+});
+
+// -------------------------
+// ❌ REJECT DOCUMENT (QA only)
+// -------------------------
+app.post('/reject-document/:id', authenticateToken, verifyStructure(['rejection_reason']), async (req, res) => {
+  const { id } = req.params;
+  const { rejection_reason } = req.body;
+  const { companyId, userId } = req.user;
+
+  if (!rejection_reason || rejection_reason.trim().length < 10) {
+    return res.status(400).json({ error: 'Rejection reason must be at least 10 characters long.' });
+  }
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update({
+      progress: 'Rejected',
+      status: 'rejected',
+      rejection_reason,
+      rejected_at: new Date().toISOString(),
+      rejected_by: userId,
+      passed_to: null,
+      progress_number: 1
+    })
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Document rejected successfully.', data });
+});
+
+// -------------------------
+// 🔄 RESUBMIT DOCUMENT (After rejection)
+// -------------------------
+app.post('/resubmit-document/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { companyId } = req.user;
+  const { assignee_id } = req.body;
+
+  const updateData = {
+    progress: 'Incomplete',
+    status: 'incomplete',
+    rejection_reason: null,
+    rejected_at: null,
+    rejected_by: null,
+    progress_number: 2
+  };
+
+  if (assignee_id) {
+    updateData.passed_to = assignee_id;
+    updateData.qa_passed_id = assignee_id;
+  }
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update(updateData)
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select();
+
+  if (error) return res.status(400).json(error);
+  res.status(200).json({ message: 'Document resubmitted successfully.', data });
 });
 
 // Get all client plans
