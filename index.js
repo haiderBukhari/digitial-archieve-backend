@@ -138,6 +138,138 @@ app.post('/verify-token', async (req, res) => {
 
 
 // -------------------------
+// 🔑 FORGOT PASSWORD FLOW
+// -------------------------
+
+// 1. Request Password Reset (Send Code)
+app.post('/forgot-password', verifyStructure(['email']), async (req, res) => {
+  const { email } = req.body;
+
+  // Check if user exists in users or clients table
+  let userExists = false;
+
+  const { data: user } = await supabase.from('users').select('id').eq('email', email).single();
+  if (user) userExists = true;
+
+  if (!userExists) {
+    const { data: client } = await supabase.from('clients').select('id').eq('email', email).single();
+    if (client) userExists = true;
+  }
+
+  if (!userExists) {
+    // Return success even if user not found to prevent enumeration, or return 404 if preferred
+    return res.status(200).json({ message: 'If your email is registered, you will receive a reset code.' });
+  }
+
+  // Generate 6-digit code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+  // Save to password_resets table
+  const { error: resetError } = await supabase.from('password_resets').insert([{
+    email,
+    code,
+    expires_at: expiresAt
+  }]);
+
+  if (resetError) return res.status(500).json({ error: 'Failed to generate reset code.' });
+
+  // Send email
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      type: 'OAuth2',
+      user: process.env.EMAIL_HOST,
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.OAUTH_REFRESH_TOKEN,
+    },
+  });
+
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_HOST,
+      to: email,
+      subject: 'Password Reset Code - Digital Archive',
+      html: `
+        <div style="font-family: Arial;">
+          <h2>Password Reset Request</h2>
+          <p>Your password reset code is:</p>
+          <h1 style="letter-spacing: 5px; background: #f4f4f4; padding: 10px; display: inline-block;">${code}</h1>
+          <p>This code will expire in 15 minutes.</p>
+          <p>If you did not request this, please ignore this email.</p>
+        </div>
+      `
+    });
+    res.status(200).json({ message: 'Reset code sent to your email.' });
+  } catch (error) {
+    console.error('Error sending email:', error);
+    res.status(500).json({ error: 'Failed to send email.' });
+  }
+});
+
+// 2. Verify Reset Code
+app.post('/verify-reset-code', verifyStructure(['email', 'code']), async (req, res) => {
+  const { email, code } = req.body;
+
+  const { data: resetEntry, error } = await supabase
+    .from('password_resets')
+    .select('*')
+    .eq('email', email)
+    .eq('code', code)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error || !resetEntry) {
+    return res.status(400).json({ error: 'Invalid or expired code.' });
+  }
+
+  res.status(200).json({ message: 'Code verified successfully.' });
+});
+
+// 3. Reset Password
+app.post('/reset-password', verifyStructure(['email', 'code', 'newPassword']), async (req, res) => {
+  const { email, code, newPassword } = req.body;
+
+  // Verify code again to be safe
+  const { data: resetEntry, error } = await supabase
+    .from('password_resets')
+    .select('*')
+    .eq('email', email)
+    .eq('code', code)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error || !resetEntry) {
+    return res.status(400).json({ error: 'Invalid or expired code.' });
+  }
+
+  // Update password in users OR clients table
+  let updated = false;
+
+  const { data: user } = await supabase.from('users').update({ password: newPassword }).eq('email', email).select();
+  if (user && user.length > 0) updated = true;
+
+  if (!updated) {
+    const { data: client } = await supabase.from('clients').update({ password: newPassword }).eq('email', email).select();
+    if (client && client.length > 0) updated = true;
+  }
+
+  if (updated) {
+    // Optionally delete used codes
+    await supabase.from('password_resets').delete().eq('email', email);
+    res.status(200).json({ message: 'Password reset successfully. You can now login.' });
+  } else {
+    res.status(404).json({ error: 'User not found.' });
+  }
+});
+
+
+// -------------------------
 // 📁 PLANS ENDPOINTS
 // -------------------------
 
@@ -674,6 +806,16 @@ app.put('/update-document-tag/:id', authenticateToken, verifyStructure(['title',
     return res.status(404).json({ error: 'Document tag not found or access denied.' });
   }
 
+  // Propagate key change to documents
+  if (title) {
+    const { error: docUpdateError } = await supabase
+      .from('documents')
+      .update({ tag_name: title })
+      .eq('tag_id', id);
+
+    if (docUpdateError) console.error("Failed to propagate tag name update to documents:", docUpdateError);
+  }
+
   res.json(data[0]);
 });
 
@@ -719,6 +861,17 @@ app.delete('/delete-document-tag/:id', authenticateToken, async (req, res) => {
 app.put('/document-tags/:id', async (req, res) => {
   const { data, error } = await supabase.from('document_tags').update(req.body).eq('id', req.params.id).select();
   if (error) return res.status(400).json(error);
+
+  // Propagate key change to documents
+  if (req.body.title) {
+    const { error: docUpdateError } = await supabase
+      .from('documents')
+      .update({ tag_name: req.body.title })
+      .eq('tag_id', req.params.id);
+
+    if (docUpdateError) console.error("Failed to propagate tag name update to documents:", docUpdateError);
+  }
+
   res.json(data);
 });
 
@@ -912,7 +1065,10 @@ app.get('/documents', authenticateToken, async (req, res) => {
 
   let query = supabase
     .from('documents')
-    .select('*')
+    .select(`
+      *,
+      notary:notaries(name)
+    `)
     .order('created_at', { ascending: false }); // 🆕 Sort by newest first
 
   // 🔐 Role-based filtering
@@ -1147,7 +1303,7 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
   let showMore = false;
 
   if (document.added_by === currentUserId || role == 'manager' || role == 'owner') {
-    showMore = !document.passed_to || document.status === 'rejected'; // true if not passed yet or rejected
+    showMore = (!document.passed_to || document.status === 'rejected') && !document.is_published; // true if not passed yet or rejected and not published
   } else {
     if (document.indexer_passed_id === currentUserId || document.qa_passed_id === currentUserId) {
       showMore = (document.passed_to === document.indexer_passed_id || document.passed_to === document.qa_passed_id) && !document.is_published;
