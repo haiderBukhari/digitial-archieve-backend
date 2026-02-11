@@ -1711,6 +1711,36 @@ app.post('/publish', authenticateToken, verifyStructure(['document_id']), async 
   res.status(200).json({ message: 'Document published successfully.', data });
 });
 
+app.post('/mark-incomplete', authenticateToken, verifyStructure(['document_id']), async (req, res) => {
+  const { document_id } = req.body;
+  const { companyId, role } = req.user;
+
+  if (role.toLowerCase() !== 'owner') {
+    return res.status(403).json({ error: 'Only owners can mark a document as incomplete.' });
+  }
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update({
+      progress_number: 1,
+      progress: 'Draft',
+      status: 'draft',
+      is_published: false,
+      passed_to: null,
+      indexer_passed_id: null,
+      qa_passed_id: null
+    })
+    .eq('id', document_id)
+    .eq('company_id', companyId)
+    .eq('is_published', true) // Only published documents can be marked incomplete
+    .select();
+
+  if (error) return res.status(400).json(error);
+  if (data.length === 0) return res.status(404).json({ error: 'Published document not found or already incomplete.' });
+
+  res.status(200).json({ message: 'Document marked incomplete successfully.', data });
+});
+
 app.post('/reject-document', authenticateToken, verifyStructure(['document_id', 'rejection_reason']), async (req, res) => {
   const { document_id, rejection_reason } = req.body;
   const { companyId, userId, role } = req.user;
