@@ -1316,6 +1316,7 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
 
   // 3. Insert document
   console.log("Creating document with text length:", document.document_text?.length || 0);
+  console.log("Creating document with text:", document.document_text);
   const { data: insertedDoc, error: insertError } = await supabase.from('documents').insert([document]).select();
   if (insertError) return res.status(400).json(insertError);
 
