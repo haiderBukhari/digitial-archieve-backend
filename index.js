@@ -9,6 +9,11 @@ import fs from 'fs'
 
 config();
 
+import multer from 'multer';
+import { uploadFile, getPresignedUrl, getFile } from './s3Service.js';
+
+const upload = multer({ storage: multer.memoryStorage() });
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
@@ -21,6 +26,7 @@ const PORT = process.env.PORT || 3000;
 
 // 🌐 Health check
 app.get('/', (req, res) => res.send('Supabase CRUD API is running'));
+
 
 // ✅ Middleware to verify structure of required fields
 const verifyStructure = (requiredFields) => (req, res, next) => {
@@ -46,6 +52,73 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+// 🛠️ S3 URL Helper
+const processDocUrl = async (url) => {
+  if (!url) return url;
+  if (url.startsWith('http')) return url; // Already a full URL (Cloudinary)
+  try {
+    return await getPresignedUrl(url);
+  } catch (error) {
+    console.error('Error processing S3 URL:', url, error);
+    return url;
+  }
+};
+
+app.get('/presigned-url', authenticateToken, async (req, res) => {
+  const { fileKey } = req.query;
+  if (!fileKey) return res.status(400).json({ error: 'Missing fileKey' });
+
+  try {
+    const url = await getPresignedUrl(fileKey);
+    res.json({ url });
+  } catch (error) {
+    console.error('Presigned URL error:', error);
+    res.status(500).json({ error: 'Failed to generate presigned URL' });
+  }
+});
+
+// ☁️ AWS S3 Upload Endpoints
+app.post('/upload', authenticateToken, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Default folder to 'documents' if not provided
+    const folder = req.body.folder || 'documents';
+
+    console.log(`Uploading file ${req.file.originalname} to folder ${folder}`);
+    const fileKey = await uploadFile(req.file, folder);
+
+    // Generate a presigned URL so the frontend can use it immediately
+    const presignedUrl = await getPresignedUrl(fileKey);
+
+    res.json({
+      fileKey,
+      url: presignedUrl, // Return the presigned URL as 'url' for compatibility
+      message: 'File uploaded successfully to AWS S3'
+    });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'Failed to upload file to AWS S3', details: error.message });
+  }
+});
+
+app.get('/fetch-s3-file', authenticateToken, async (req, res) => {
+  const { fileKey } = req.query;
+  if (!fileKey) return res.status(400).json({ error: 'Missing fileKey' });
+
+  try {
+    const { body, contentType } = await getFile(fileKey);
+    res.setHeader('Content-Type', contentType || 'application/pdf');
+    // Stream the body to the response
+    body.pipe(res);
+  } catch (error) {
+    console.error('Error fetching S3 file:', error);
+    res.status(500).json({ error: 'Failed to fetch file from S3' });
+  }
+});
 
 app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
   const { email, password } = req.body;
@@ -402,7 +475,12 @@ app.get('/companies/:id', async (req, res) => {
     .select('*')
     .eq('id', companyId)
     .single();
+
   if (companyError || !company) return res.status(404).json({ error: 'Company not found' });
+
+  // Convert logo S3 key to presigned URL
+  const processedLogo = await processDocUrl(company.logo_url);
+  const enhancedCompany = { ...company, logo_url: processedLogo };
 
   // 2. Get Users
   const { data: users, error: userError } = await supabase
@@ -444,7 +522,7 @@ app.get('/companies/:id', async (req, res) => {
 
   // ✅ Final response
   res.status(200).json({
-    ...company,
+    ...enhancedCompany,
     users,
     plan,
     invoices,
@@ -1007,7 +1085,11 @@ app.get('/users', authenticateToken, async (req, res) => {
     .neq('id', userId);
 
   if (error) return res.status(400).json(error);
-  res.json(data);
+  const enhancedUsers = await Promise.all(data.map(async u => ({
+    ...u,
+    profile_picture: await processDocUrl(u.profile_picture)
+  })));
+  res.json(enhancedUsers);
 });
 
 app.get('/current-users', authenticateToken, async (req, res) => {
@@ -1020,7 +1102,11 @@ app.get('/current-users', authenticateToken, async (req, res) => {
     .eq('id', userId);
 
   if (error) return res.status(400).json(error);
-  res.json(data);
+  const enhancedUsers = await Promise.all(data.map(async u => ({
+    ...u,
+    profile_picture: await processDocUrl(u.profile_picture)
+  })));
+  res.json(enhancedUsers);
 });
 
 app.post('/users', authenticateToken, verifyStructure(['name', 'email', 'phone', 'role', 'password']), async (req, res) => {
@@ -1063,13 +1149,20 @@ app.get('/documents', authenticateToken, async (req, res) => {
   const { companyId, userId, role } = req.user;
   const roleLower = role.toLowerCase();
 
+  // Pagination params
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const offset = (page - 1) * limit;
+
+  // Filter params
+  const { searchTerm, notaryId, startDate, endDate, status } = req.query;
+
   let query = supabase
     .from('documents')
     .select(`
       *,
       notary:notaries(name)
-    `)
-    .order('created_at', { ascending: false }); // 🆕 Sort by newest first
+    `, { count: 'exact' });
 
   // 🔐 Role-based filtering
   if (roleLower === 'owner' || roleLower === 'manager') {
@@ -1079,7 +1172,6 @@ app.get('/documents', authenticateToken, async (req, res) => {
   } else if (roleLower === 'indexer') {
     query = query.eq('company_id', companyId).eq('indexer_passed_id', userId);
   } else if (roleLower === 'qa') {
-    // Show documents specifically assigned to this QA OR documents in Review stage (progress_number: 2) that are not yet assigned
     query = query.eq('company_id', companyId).or(`qa_passed_id.eq.${userId},and(qa_passed_id.is.null,progress_number.eq.2)`);
   } else if (roleLower === 'client') {
     query = query.eq('company_id', companyId).eq('added_by', userId);
@@ -1090,13 +1182,34 @@ app.get('/documents', authenticateToken, async (req, res) => {
   // 🗑️ Exclude soft-deleted documents
   query = query.is('deleted_at', null);
 
+  // 🔍 Apply Filters
+  if (notaryId && notaryId !== 'all') {
+    query = query.eq('notary_id', notaryId);
+  }
+
+  if (startDate) {
+    query = query.gte('created_at', startDate);
+  }
+  if (endDate) {
+    query = query.lte('created_at', endDate);
+  }
+
+  if (searchTerm) {
+    // Search in title, tag_name or document_text
+    query = query.or(`title.ilike.%${searchTerm}%,tag_name.ilike.%${searchTerm}%,document_text.ilike.%${searchTerm}%`);
+  }
+
+  // Sort and Paginate
+  query = query.order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
   // 📄 Fetch documents
-  const { data: documents, error } = await query;
+  const { data: documents, error, count } = await query;
 
   if (error) return res.status(400).json(error);
 
   // 🏢 Fetch company indexing setting
-  const { data: company, error: companyError } = await supabase
+  const { data: company } = await supabase
     .from('companies')
     .select('needs_indexing')
     .eq('id', companyId)
@@ -1105,56 +1218,57 @@ app.get('/documents', authenticateToken, async (req, res) => {
   const needsIndexing = company?.needs_indexing ?? true;
 
   // 👤 Fetch users, clients, and notaries
-  const { data: users, error: userError } = await supabase.from('users').select('id, name, role');
-  const { data: clients, error: clientError } = await supabase.from('clients').select('id, name');
-  const { data: notaries, error: notaryError } = await supabase.from('notaries').select('id, name').eq('company_id', companyId);
-
-  if (userError || clientError || notaryError) return res.status(400).json(userError || clientError || notaryError);
+  const { data: users } = await supabase.from('users').select('id, name, role');
+  const { data: clients } = await supabase.from('clients').select('id, name');
+  const { data: notaries } = await supabase.from('notaries').select('id, name').eq('company_id', companyId);
 
   const usersMap = {};
-  users.forEach(u => {
-    usersMap[u.id] = { name: u.name, role: u.role };
-  });
-  clients.forEach(c => {
-    usersMap[c.id] = { name: c.name, role: 'Client' };
-  });
+  if (users) {
+    users.forEach(u => usersMap[u.id] = { name: u.name, role: u.role });
+  }
+  if (clients) {
+    clients.forEach(c => usersMap[c.id] = { name: c.name, role: 'Client' });
+  }
 
   const notariesMap = {};
   if (notaries) {
-    notaries.forEach(n => {
-      notariesMap[n.id] = n.name;
-    });
+    notaries.forEach(n => notariesMap[n.id] = n.name);
   }
 
-  const enhancedDocs = documents.map(doc => {
+  const enhancedDocs = await Promise.all(documents.map(async doc => {
     const addedBy = usersMap[doc.added_by] || null;
-
     let requestedById = doc.added_by;
     if (roleLower === 'qa') {
       requestedById = doc.indexer_passed_id || doc.added_by;
     }
 
     const requestedBy = requestedById && usersMap[requestedById]
-      ? {
-        name: usersMap[requestedById].name,
-        role: usersMap[requestedById].role
-      }
+      ? { name: usersMap[requestedById].name, role: usersMap[requestedById].role }
       : null;
+
+    // Convert S3 key to presigned URL if needed
+    const processedUrl = await processDocUrl(doc.url);
 
     return {
       ...doc,
+      url: processedUrl,
       added_by_user: addedBy,
       requested_by: requestedBy,
-      notary_name: doc.notary_id ? notariesMap[doc.notary_id] : null,
+      notary_name: doc.notary_id ? notariesMap[doc.notary_id] : (doc.notary?.name || null),
       needs_indexing: needsIndexing
     };
-  });
+  }));
 
-  res.json(enhancedDocs);
+  res.json({
+    documents: enhancedDocs,
+    totalCount: count,
+    totalPages: Math.ceil(count / limit),
+    currentPage: page
+  });
 });
 
 app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag_name', 'file_id']), async (req, res) => {
-  const { url, tag_id, tag_name, file_id, title, notary_id } = req.body;
+  const { url, tag_id, tag_name, file_id, title, notary_id, document_text } = req.body;
   const company_id = req.user.companyId;
   const added_by = req.user.userId;
   const role = req.user.role;
@@ -1170,10 +1284,13 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
     return res.status(400).json({ error: 'Invalid tag selected.' });
   }
 
-  const propertiesWithValues = tagData.properties.map(prop => ({
-    ...prop,
-    value: ''
-  }));
+  // Use properties from body if provided, otherwise initialize from tag
+  const propertiesWithValues = (req.body.properties && Array.isArray(req.body.properties))
+    ? req.body.properties
+    : tagData.properties.map(prop => ({
+      ...prop,
+      value: ''
+    }));
 
   // 2. Prepare document
   const document = {
@@ -1193,10 +1310,12 @@ app.post('/documents', authenticateToken, verifyStructure(['url', 'tag_id', 'tag
     role,
     properties: propertiesWithValues,
     file_id,
-    notary_id: notary_id || null
+    notary_id: notary_id || null,
+    document_text: document_text || null
   };
 
   // 3. Insert document
+  console.log("Creating document with text length:", document.document_text?.length || 0);
   const { data: insertedDoc, error: insertError } = await supabase.from('documents').insert([document]).select();
   if (insertError) return res.status(400).json(insertError);
 
@@ -1259,19 +1378,23 @@ app.get('/documents/deleted', authenticateToken, async (req, res) => {
   // Calculate days until permanent deletion and add to each document
   const now = new Date();
   const retentionDays = 60;
-  const enhancedDocs = documents.map(doc => {
+  const enhancedDocs = await Promise.all(documents.map(async doc => {
     const deletedAt = new Date(doc.deleted_at);
     const daysSinceDeletion = Math.floor((now - deletedAt) / (1000 * 60 * 60 * 24));
     const daysUntilPermanentDeletion = retentionDays - daysSinceDeletion;
     const shouldAutoDelete = daysUntilPermanentDeletion <= 0;
 
+    // Convert S3 key to presigned URL if needed
+    const processedUrl = await processDocUrl(doc.url);
+
     return {
       ...doc,
+      url: processedUrl,
       days_until_permanent_deletion: Math.max(0, daysUntilPermanentDeletion),
       days_since_deletion: daysSinceDeletion,
       should_auto_delete: shouldAutoDelete
     };
-  });
+  }));
 
   res.json(enhancedDocs);
 });
@@ -1312,7 +1435,10 @@ app.get('/documents/:id', authenticateToken, async (req, res) => {
     }
   }
 
-  res.json({ ...document, notary_name, showMore });
+  // Convert S3 key to presigned URL if needed
+  const processedUrl = await processDocUrl(document.url);
+
+  res.json({ ...document, url: processedUrl, notary_name, showMore });
 });
 
 app.put('/documents/:id/add-comment', authenticateToken, verifyStructure(['comment']), async (req, res) => {
@@ -1702,7 +1828,13 @@ app.post('/publish', authenticateToken, verifyStructure(['document_id']), async 
 
   const { data, error } = await supabase
     .from('documents')
-    .update({ progress_number: 3, progress: 'Complete', status: 'complete', is_published: true })
+    .update({
+      progress_number: 3,
+      progress: 'Complete',
+      status: 'complete',
+      is_published: true,
+      qa_passed_id: req.user.userId
+    })
     .eq('id', document_id)
     .eq('company_id', companyId)
     .select();
@@ -3030,7 +3162,8 @@ app.post('/get-shared-document', verifyStructure(['document_id', 'document_passw
 
   if (error || !shared) return res.status(404).json({ error: 'Invalid link or password' });
 
-  res.status(200).json({ message: 'Document access granted.', shared });
+  const processedLink = await processDocUrl(shared.document_link);
+  res.status(200).json({ message: 'Document access granted.', shared: { ...shared, document_link: processedLink } });
 });
 
 // 📥 Get Shared Document URL (Client only)
@@ -3125,7 +3258,8 @@ app.get('/download-document/:document_id', authenticateToken, async (req, res) =
     }
   }
 
-  res.status(200).json({ document_url: document.url });
+  const processedUrl = await processDocUrl(document.url);
+  res.status(200).json({ document_url: processedUrl });
 });
 
 app.get('/get-profile', authenticateToken, async (req, res) => {
@@ -3139,7 +3273,8 @@ app.get('/get-profile', authenticateToken, async (req, res) => {
     .single();
 
   if (user && !userError) {
-    return res.json({ role: 'User', profile: user });
+    const profilePicture = await processDocUrl(user.profile_picture);
+    return res.json({ role: 'User', profile: { ...user, profile_picture: profilePicture } });
   }
 
   // If not found, try clients table
@@ -3150,7 +3285,8 @@ app.get('/get-profile', authenticateToken, async (req, res) => {
     .single();
 
   if (client && !clientError) {
-    return res.json({ role: 'Client', profile: client });
+    const profilePicture = await processDocUrl(client.profile_picture);
+    return res.json({ role: 'Client', profile: { ...client, profile_picture: profilePicture } });
   }
 
   return res.status(404).json({ error: 'Profile not found.' });
@@ -3177,7 +3313,8 @@ app.put('/get-profile', authenticateToken, async (req, res) => {
     .single();
 
   if (updatedUser && !userUpdateError) {
-    return res.status(200).json({ message: 'User profile updated.', profile: updatedUser });
+    const profilePicture = await processDocUrl(updatedUser.profile_picture);
+    return res.status(200).json({ message: 'User profile updated.', profile: { ...updatedUser, profile_picture: profilePicture } });
   }
 
   // If not in users table, try clients
@@ -3189,7 +3326,8 @@ app.put('/get-profile', authenticateToken, async (req, res) => {
     .single();
 
   if (updatedClient && !clientUpdateError) {
-    return res.status(200).json({ message: 'Client profile updated.', profile: updatedClient });
+    const profilePicture = await processDocUrl(updatedClient.profile_picture);
+    return res.status(200).json({ message: 'Client profile updated.', profile: { ...updatedClient, profile_picture: profilePicture } });
   }
 
   return res.status(400).json({ error: 'Failed to update profile.' });
@@ -3917,4 +4055,140 @@ app.get('/get-storage', authenticateToken, async (req, res) => {
   });
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// 📊 REPORTS
+// -------------------------
+app.get('/reports/user-activity', authenticateToken, async (req, res) => {
+  const { companyId, role } = req.user;
+  const { startDate, endDate } = req.query;
+
+  if (role.toLowerCase() !== 'owner' && role.toLowerCase() !== 'manager') {
+    return res.status(403).json({ error: 'Unauthorized. Only owners and managers can access activity reports.' });
+  }
+
+  // 👤 Fetch all users in the company
+  const { data: users, error: userError } = await supabase
+    .from('users')
+    .select('id, name, email, role, status, created_at')
+    .eq('company_id', companyId);
+
+  if (userError) return res.status(400).json(userError);
+
+  // 📄 Fetch all documents for this company
+  let docQuery = supabase
+    .from('documents')
+    .select('id, added_by, created_at, qa_passed_id, indexer_passed_id, status, is_published')
+    .eq('company_id', companyId)
+    .is('deleted_at', null);
+
+  const { data: documents, error: docError } = await docQuery;
+  if (docError) return res.status(400).json(docError);
+
+  // Aggregate stats
+  const userStats = users.map(user => {
+    const uRole = user.role?.toLowerCase();
+
+    // 1. UploadedDocs (within period if dates provided)
+    const userUploadedDocs = documents.filter(doc => {
+      if (doc.added_by !== user.id) return false;
+      if (startDate && new Date(doc.created_at) < new Date(startDate)) return false;
+      if (endDate && new Date(doc.created_at) > new Date(endDate)) return false;
+      return true;
+    });
+
+    // 2. PublishedDocs (Role-based logic)
+    const publishedDocs = documents.filter(doc => {
+      if (doc.status?.toLowerCase() !== 'complete' && !doc.is_published) return false;
+
+      // QA Published: If user is QA and present in qa_passed_id
+      if (uRole === 'qa') {
+        return doc.qa_passed_id === user.id;
+      }
+
+      // Indexer Published: If user is Indexer, in indexer_passed_id, and no QA involved
+      if (uRole === 'indexer') {
+        return doc.indexer_passed_id === user.id && !doc.qa_passed_id;
+      }
+
+      // Scanner/Owner/Manager Published: If they uploaded and it skipped all other roles
+      if (['scanner', 'owner', 'manager'].includes(uRole)) {
+        return doc.added_by === user.id && !doc.indexer_passed_id && !doc.qa_passed_id;
+      }
+
+      return false;
+    });
+
+    return {
+      ...user,
+      uploadCount: userUploadedDocs.length,
+      publishedCount: publishedDocs.length
+    };
+  });
+
+  res.json(userStats);
+});
+
+// Single User Details
+app.get('/users/:id', authenticateToken, async (req, res) => {
+  const { companyId, role } = req.user;
+  const userId = req.params.id;
+
+  if (role.toLowerCase() !== 'owner' && role.toLowerCase() !== 'manager') {
+    return res.status(403).json({ error: 'Unauthorized.' });
+  }
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .eq('company_id', companyId)
+    .single();
+
+  if (error || !user) return res.status(404).json({ error: 'User not found' });
+
+  // 📄 Fetch all documents for this company
+  const { data: documents, error: docError } = await supabase
+    .from('documents')
+    .select('id, added_by, created_at, qa_passed_id, indexer_passed_id, status, is_published')
+    .eq('company_id', companyId)
+    .is('deleted_at', null);
+
+  if (docError) return res.status(400).json(docError);
+
+  const uRole = user.role?.toLowerCase();
+  const uploadCount = documents.filter(doc => doc.added_by === userId).length;
+
+  const publishedDocs = documents.filter(doc => {
+    if (doc.status?.toLowerCase() !== 'complete' && !doc.is_published) return false;
+
+    // QA Published
+    if (uRole === 'qa') {
+      return doc.qa_passed_id === userId;
+    }
+
+    // Indexer Published: indexed it and no QA was required
+    if (uRole === 'indexer') {
+      return doc.indexer_passed_id === userId && !doc.qa_passed_id;
+    }
+
+    // Scanner/Owner/Manager Published: uploaded it and it skipped all other roles
+    if (['scanner', 'owner', 'manager'].includes(uRole)) {
+      return doc.added_by === userId && !doc.indexer_passed_id && !doc.qa_passed_id;
+    }
+
+    return false;
+  });
+
+  res.json({
+    ...user,
+    metrics: {
+      uploadCount: uploadCount || 0,
+      publishedCount: publishedDocs.length || 0
+    }
+  });
+});
+
+// Listens
+// -------------------------
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});

@@ -12,6 +12,8 @@
   "description": "",
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.996.0",
+    "@aws-sdk/s3-request-presigner": "^3.996.0",
     "@supabase/supabase-js": "^2.49.4",
     "cors": "^2.8.5",
     "date-fns": "^4.1.0",
@@ -19,6 +21,8 @@
     "express": "^5.1.0",
     "googleapis": "^148.0.0",
     "jsonwebtoken": "^9.0.2",
-    "nodemailer": "^6.10.0"
+    "multer": "^2.0.2",
+    "nodemailer": "^6.10.0",
+    "uuid": "^13.0.0"
   }
 }
