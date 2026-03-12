@@ -139,13 +139,15 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     if (client && client.password === password) {
       const { data: company, error: companyError } = await supabase
         .from('companies')
-        .select('status')
+        .select('status, requires_notary')
         .eq('id', client.company_id)
         .single();
 
       if (companyError || !company || company.status !== 'Active') {
         return res.status(403).json({ error: 'Company is not active. Please contact support.' });
       }
+
+      client.requires_notary = company.requires_notary;
 
       if (client.status !== 'active') {
         return res.status(403).json({ error: 'Your account is not active. Please contact your company admin.' });
@@ -163,13 +165,15 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
   } else if (user.role != 'admin') {
     const { data: company, error: companyError } = await supabase
       .from('companies')
-      .select('status')
+      .select('status, requires_notary')
       .eq('id', user.company_id)
       .single();
 
     if (companyError || !company || company.status !== 'Active') {
       return res.status(403).json({ error: 'Company is not active. Please contact support.' });
     }
+
+    user.requires_notary = company.requires_notary;
   }
 
   // Generate token
@@ -178,7 +182,8 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
       userId: user.id,
       companyId: user.company_id || null,
       role: user.role,
-      name: user.name
+      name: user.name,
+      requires_notary: user.requires_notary !== false
     },
     process.env.JWT_SECRET,
     { expiresIn: '1d' }
@@ -189,7 +194,8 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     role: user.role,
     userId: user.id,
     companyId: user.company_id,
-    name: user.name
+    name: user.name,
+    requires_notary: user.requires_notary !== false
   });
 });
 
@@ -575,7 +581,7 @@ app.get('/client/:id', async (req, res) => {
 });
 
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
-  const { name, contact_email, password_hash, plan_id, admin_name, logo_url } = req.body;
+  const { name, contact_email, password_hash, plan_id, admin_name, logo_url, requires_notary } = req.body;
 
   // Step 1: Check for existing company
   const { data: existingCompany, error: checkError } = await supabase
@@ -602,7 +608,7 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
   // Step 3: Insert company
   const { data: companyData, error: createError } = await supabase
     .from('companies')
-    .insert([{ name, contact_email, password_hash, plan_id, admin_name, logo_url: logo_url || null }])
+    .insert([{ name, contact_email, password_hash, plan_id, admin_name, logo_url: logo_url || null, requires_notary: requires_notary !== false }])
     .select();
 
   if (createError) return res.status(400).json(createError);
