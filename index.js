@@ -139,7 +139,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     if (client && client.password === password) {
       const { data: company, error: companyError } = await supabase
         .from('companies')
-        .select('status, requires_notary')
+        .select('status, requires_notary, ai_analysis_method')
         .eq('id', client.company_id)
         .single();
 
@@ -148,6 +148,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
       }
 
       client.requires_notary = company.requires_notary;
+      client.ai_analysis_method = company.ai_analysis_method || 'full';
 
       if (client.status !== 'active') {
         return res.status(403).json({ error: 'Your account is not active. Please contact your company admin.' });
@@ -165,7 +166,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
   } else if (user.role != 'admin') {
     const { data: company, error: companyError } = await supabase
       .from('companies')
-      .select('status, requires_notary')
+      .select('status, requires_notary, ai_analysis_method')
       .eq('id', user.company_id)
       .single();
 
@@ -174,6 +175,7 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     }
 
     user.requires_notary = company.requires_notary;
+    user.ai_analysis_method = company.ai_analysis_method || 'full';
   }
 
   // Generate token
@@ -183,7 +185,8 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
       companyId: user.company_id || null,
       role: user.role,
       name: user.name,
-      requires_notary: user.requires_notary !== false
+      requires_notary: user.requires_notary !== false,
+      ai_analysis_method: user.ai_analysis_method || 'full'
     },
     process.env.JWT_SECRET,
     { expiresIn: '1d' }
@@ -195,8 +198,73 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
     userId: user.id,
     companyId: user.company_id,
     name: user.name,
-    requires_notary: user.requires_notary !== false
+    requires_notary: user.requires_notary !== false,
+    ai_analysis_method: user.ai_analysis_method || 'full'
   });
+});
+
+app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
+  const { name, contact_email, password_hash, plan_id, admin_name, logo_url, requires_notary, ai_analysis_method } = req.body;
+
+  // Step 1: Check for existing company
+  const { data: existingCompany, error: checkError } = await supabase
+    .from('companies')
+    .select('id')
+    .eq('contact_email', contact_email)
+    .single();
+
+  if (existingCompany) {
+    return res.status(409).json({ error: 'Company already exists with this email.' });
+  }
+
+  // Step 2: Fetch plan details to get price_description
+  const { data: plan, error: planError } = await supabase
+    .from('plans')
+    .select('price_description')
+    .eq('id', plan_id)
+    .single();
+
+  if (planError || !plan) {
+    return res.status(400).json({ error: 'Invalid plan selected.' });
+  }
+
+  // Step 3: Insert company
+  const { data: companyData, error: createError } = await supabase
+    .from('companies')
+    .insert([{ 
+      name, 
+      contact_email, 
+      password_hash, 
+      plan_id, 
+      admin_name, 
+      logo_url: logo_url || null, 
+      requires_notary: requires_notary !== false,
+      ai_analysis_method: ai_analysis_method || 'full'
+    }])
+    .select();
+
+  if (createError) return res.status(400).json(createError);
+  const company = companyData[0];
+
+  // Step 4: Create admin user
+  const { error: userError } = await supabase.from('users').insert([{
+    name: admin_name,
+    email: contact_email,
+    phone: '',
+    role: 'Owner',
+    password: password_hash,
+    company_id: company.id,
+    status: 'active'
+  }]);
+
+  if (userError) {
+    return res.status(500).json({ error: 'Company created but failed to create admin user.' });
+  }
+
+  // Step 5: Send welcome email
+  await sendWelcomeEmail(name, contact_email, password_hash, `${process.env.FRONTEND_URL}`);
+
+  res.status(201).json(companyData);
 });
 
 app.post('/verify-token', async (req, res) => {
@@ -1203,6 +1271,26 @@ app.get('/documents', authenticateToken, async (req, res) => {
   if (searchTerm) {
     // Search in title, tag_name or document_text
     query = query.or(`title.ilike.%${searchTerm}%,tag_name.ilike.%${searchTerm}%,document_text.ilike.%${searchTerm}%`);
+  }
+
+  // 📊 Status Filtering
+  if (status && status !== 'all') {
+    const statusLower = status.toLowerCase();
+    if (statusLower === 'draft') {
+      query = query.or('status.ilike.draft,progress_number.eq.0');
+    } else if (statusLower === 'complete') {
+      query = query.or('status.ilike.complete,and(progress_number.eq.3,is_published.eq.true)');
+    } else if (statusLower === 'incomplete') {
+      // Incomplete is NOT draft and NOT complete
+      query = query.not('status', 'ilike', 'draft')
+        .not('progress_number', 'eq', 0)
+        .not('status', 'ilike', 'complete');
+      
+      // And must not be fully published if it's considered complete by progress
+      query = query.or('is_published.eq.false,progress_number.lt.3');
+    } else if (statusLower === 'rejected') {
+      query = query.ilike('status', 'rejected');
+    }
   }
 
   // Sort and Paginate
