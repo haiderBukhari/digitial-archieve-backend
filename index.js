@@ -3656,7 +3656,7 @@ app.get('/stats', authenticateToken, async (req, res) => {
     // 3. Get documents for this company
     const { data: documents, error: docError } = await supabase
       .from('documents')
-      .select('is_published')
+      .select('is_published, status, progress_number')
       .eq('company_id', companyId);
 
     if (docError) {
@@ -3664,13 +3664,15 @@ app.get('/stats', authenticateToken, async (req, res) => {
     }
 
     const totalDocumentsUploaded = documents.length;
-    const totalDocumentsPublished = documents.filter(doc => doc.is_published === true).length;
+    const totalDocumentsDraft = documents.filter(doc => (doc.status?.toLowerCase() === 'draft' || doc.progress_number === 0)).length;
+    const totalDocumentsPublished = documents.filter(doc => doc.status?.toLowerCase() === 'complete' || (doc.progress_number === 3 && doc.is_published === true)).length;
 
     // 4. Return combined stats
     res.status(200).json({
       totalInvoiceAmount: (totalInvoiceAmountFromInvoices + totalInvoiceAmountFromCustom).toFixed(2),
       totalDocumentsUploaded,
-      totalDocumentsPublished
+      totalDocumentsPublished,
+      totalDocumentsDraft
     });
 
   } catch (err) {
