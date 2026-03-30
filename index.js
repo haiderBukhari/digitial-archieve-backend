@@ -1219,6 +1219,54 @@ app.delete('/users/:id', async (req, res) => {
 // -------------------------
 // 📁 DOCUMENTS
 // -------------------------
+app.get('/documents/stats', authenticateToken, async (req, res) => {
+  const { companyId, userId, role } = req.user;
+  const roleLower = role.toLowerCase();
+
+  try {
+    const getBaseQuery = () => {
+      let query = supabase.from('documents').select('*', { count: 'exact', head: true }).is('deleted_at', null);
+
+      if (roleLower === 'owner' || roleLower === 'manager') {
+        query = query.eq('company_id', companyId);
+      } else if (roleLower === 'scanner') {
+        query = query.eq('company_id', companyId).eq('added_by', userId);
+      } else if (roleLower === 'indexer') {
+        query = query.eq('company_id', companyId).eq('indexer_passed_id', userId);
+      } else if (roleLower === 'qa') {
+        query = query.eq('company_id', companyId).or(`qa_passed_id.eq.${userId},and(qa_passed_id.is.null,progress_number.eq.2)`);
+      } else if (roleLower === 'client') {
+        query = query.eq('company_id', companyId).eq('added_by', userId);
+      } else {
+        throw new Error('Unauthorized role access.');
+      }
+      return query;
+    };
+
+    const [totalRes, draftRes, incompleteRes, completeRes] = await Promise.all([
+      getBaseQuery(),
+      getBaseQuery().or('status.ilike.draft,progress_number.eq.0'),
+      getBaseQuery().not('status', 'ilike', 'draft').not('progress_number', 'eq', 0).not('status', 'ilike', 'complete').or('is_published.eq.false,progress_number.lt.3'),
+      getBaseQuery().or('status.ilike.complete,and(progress_number.eq.3,is_published.eq.true)')
+    ]);
+
+    if (totalRes.error) throw totalRes.error;
+
+    res.json({
+      total: totalRes.count || 0,
+      draft: draftRes.count || 0,
+      incomplete: incompleteRes.count || 0,
+      complete: completeRes.count || 0
+    });
+  } catch (error) {
+    if (error.message === 'Unauthorized role access.') {
+      return res.status(403).json({ error: error.message });
+    }
+    console.error('Error fetching document stats:', error);
+    res.status(500).json({ error: 'Failed to fetch document statistics' });
+  }
+});
+
 app.get('/documents', authenticateToken, async (req, res) => {
   const { companyId, userId, role } = req.user;
   const roleLower = role.toLowerCase();
