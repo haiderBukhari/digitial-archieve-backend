@@ -19,6 +19,31 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
+// 🏢 Tenant Client Helper
+const getTenantClientFromCompany = (company) => {
+  if (company && company.tenant_db_url && company.tenant_db_anon_key) {
+    try {
+      return createClient(company.tenant_db_url, company.tenant_db_anon_key);
+    } catch (e) {
+      console.error('Error creating tenant client:', e);
+      return supabase;
+    }
+  }
+  return supabase;
+};
+
+const getTenantClientFromId = async (companyId) => {
+  if (!companyId) return supabase;
+  const { data: company, error } = await supabase
+    .from('companies')
+    .select('tenant_db_url, tenant_db_anon_key')
+    .eq('id', companyId)
+    .single();
+
+  if (error || !company) return supabase;
+  return getTenantClientFromCompany(company);
+};
+
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: '*' }))
@@ -203,69 +228,6 @@ app.post('/login', verifyStructure(['email', 'password']), async (req, res) => {
   });
 });
 
-app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
-  const { name, contact_email, password_hash, plan_id, admin_name, logo_url, requires_notary, ai_analysis_method } = req.body;
-
-  // Step 1: Check for existing company
-  const { data: existingCompany, error: checkError } = await supabase
-    .from('companies')
-    .select('id')
-    .eq('contact_email', contact_email)
-    .single();
-
-  if (existingCompany) {
-    return res.status(409).json({ error: 'Company already exists with this email.' });
-  }
-
-  // Step 2: Fetch plan details to get price_description
-  const { data: plan, error: planError } = await supabase
-    .from('plans')
-    .select('price_description')
-    .eq('id', plan_id)
-    .single();
-
-  if (planError || !plan) {
-    return res.status(400).json({ error: 'Invalid plan selected.' });
-  }
-
-  // Step 3: Insert company
-  const { data: companyData, error: createError } = await supabase
-    .from('companies')
-    .insert([{ 
-      name, 
-      contact_email, 
-      password_hash, 
-      plan_id, 
-      admin_name, 
-      logo_url: logo_url || null, 
-      requires_notary: requires_notary !== false,
-      ai_analysis_method: ai_analysis_method || 'full'
-    }])
-    .select();
-
-  if (createError) return res.status(400).json(createError);
-  const company = companyData[0];
-
-  // Step 4: Create admin user
-  const { error: userError } = await supabase.from('users').insert([{
-    name: admin_name,
-    email: contact_email,
-    phone: '',
-    role: 'Owner',
-    password: password_hash,
-    company_id: company.id,
-    status: 'active'
-  }]);
-
-  if (userError) {
-    return res.status(500).json({ error: 'Company created but failed to create admin user.' });
-  }
-
-  // Step 5: Send welcome email
-  await sendWelcomeEmail(name, contact_email, password_hash, `${process.env.FRONTEND_URL}`);
-
-  res.status(201).json(companyData);
-});
 
 app.post('/verify-token', async (req, res) => {
   const authHeader = req.headers['authorization'];
@@ -556,8 +518,10 @@ app.get('/companies/:id', async (req, res) => {
   const processedLogo = await processDocUrl(company.logo_url);
   const enhancedCompany = { ...company, logo_url: processedLogo };
 
+  const tenantSupabase = getTenantClientFromCompany(company);
+
   // 2. Get Users
-  const { data: users, error: userError } = await supabase
+  const { data: users, error: userError } = await tenantSupabase
     .from('users')
     .select('id, name, email, phone, role, documents_reviewed, status')
     .eq('company_id', companyId);
@@ -572,27 +536,28 @@ app.get('/companies/:id', async (req, res) => {
   if (planError) return res.status(400).json({ error: 'Failed to fetch plan info' });
 
   // 4. Get Invoices
-  const { data: invoices, error: invoiceError } = await supabase
+  const { data: invoices, error: invoiceError } = await tenantSupabase
     .from('invoices')
     .select('id, invoice_month, invoice_value, monthly, invoice_submitted, created_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
-  if (invoiceError) return res.status(400).json({ error: 'Failed to fetch invoices' });
+  // If invoice fetch fails on tenant, it might be due to a missing table. Log it and return empty array.
+  if (invoiceError) console.error('Failed to fetch invoices from tenant', invoiceError);
 
   // 5. Get Total Documents Uploaded
-  const { count: total_documents_uploaded, error: docCountError } = await supabase
+  const { count: total_documents_uploaded, error: docCountError } = await tenantSupabase
     .from('documents')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', companyId);
-  if (docCountError) return res.status(400).json({ error: 'Failed to count uploaded documents' });
+  if (docCountError) console.error('Failed to count uploaded documents from tenant', docCountError);
 
   // 6. Get Total Documents Published
-  const { count: total_documents_published, error: pubCountError } = await supabase
+  const { count: total_documents_published, error: pubCountError } = await tenantSupabase
     .from('documents')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('is_published', true);
-  if (pubCountError) return res.status(400).json({ error: 'Failed to count published documents' });
+  if (pubCountError) console.error('Failed to count published documents from tenant', pubCountError);
 
   // ✅ Final response
   res.status(200).json({
@@ -649,7 +614,7 @@ app.get('/client/:id', async (req, res) => {
 });
 
 app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash', 'plan_id', 'admin_name']), async (req, res) => {
-  const { name, contact_email, password_hash, plan_id, admin_name, logo_url, requires_notary } = req.body;
+  const { name, contact_email, password_hash, plan_id, admin_name, logo_url, requires_notary, ai_analysis_method, tenant_db_url, tenant_db_anon_key } = req.body;
 
   // Step 1: Check for existing company
   const { data: existingCompany, error: checkError } = await supabase
@@ -662,7 +627,28 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
     return res.status(409).json({ error: 'Company already exists with this email.' });
   }
 
-  // Step 2: Fetch plan details to get price_description
+  // Step 2: Initialize Tenant DB and Test connection if provided
+  let tenantClient = null;
+  if (tenant_db_url && tenant_db_anon_key) {
+    try {
+      // Setup Supabase Client
+      tenantClient = createClient(tenant_db_url, tenant_db_anon_key);
+      
+      // Test the connection
+      const { error: testError } = await tenantClient.from('plans').select('id').limit(1);
+      if (testError) {
+         console.error("Tenant DB connection test failed:", testError);
+         return res.status(400).json({ error: 'Tenant DB connection failed: ' + testError.message });
+      }
+      console.log('Successfully connected to tenant DB');
+
+    } catch (err) {
+      console.error('Tenant DB initialization failed:', err);
+      return res.status(400).json({ error: 'Tenant DB connection failed: ' + err.message });
+    }
+  }
+
+  // Step 3: Fetch plan details to get price_description
   const { data: plan, error: planError } = await supabase
     .from('plans')
     .select('price_description')
@@ -673,17 +659,93 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
     return res.status(400).json({ error: 'Invalid plan selected.' });
   }
 
-  // Step 3: Insert company
+  // Step 4: Insert company into global DB
   const { data: companyData, error: createError } = await supabase
     .from('companies')
-    .insert([{ name, contact_email, password_hash, plan_id, admin_name, logo_url: logo_url || null, requires_notary: requires_notary !== false }])
+    .insert([{ name, contact_email, password_hash, plan_id, admin_name, logo_url: logo_url || null, requires_notary: requires_notary !== false, ai_analysis_method: ai_analysis_method || 'full', tenant_db_url: tenant_db_url || null, tenant_db_anon_key: tenant_db_anon_key || null }])
     .select();
 
   if (createError) return res.status(400).json(createError);
   const company = companyData[0];
 
-  // Step 4: Create admin user
-  const { error: userError } = await supabase.from('users').insert([{
+  // Step 5: If multi-tenant, mirror the insertion into the tenant DB
+  if (tenantClient) {
+    console.log(`Starting tenant DB mirroring for company: ${company.id}`);
+    
+    // 5.1 Sync Plan (Foreign Key dependency)
+    let tenantPlanId = plan_id;
+    const { data: tenantPlanById, error: tPlanIdError } = await tenantClient
+      .from('plans')
+      .select('id')
+      .eq('id', plan_id)
+      .maybeSingle();
+
+    if (tPlanIdError) {
+      console.error('Error checking plan by ID in tenant DB:', tPlanIdError);
+      return res.status(400).json({ error: 'Failed to verify plan by ID in tenant DB: ' + tPlanIdError.message });
+    }
+
+    if (!tenantPlanById) {
+      // Try finding by name (common in manual setups)
+      const { data: globalPlan, error: gPlanFetchError } = await supabase.from('plans').select('*').eq('id', plan_id).single();
+      if (gPlanFetchError || !globalPlan) {
+         return res.status(400).json({ error: 'Failed to find global plan for syncing.' });
+      }
+
+      const { data: tenantPlanByName, error: tPlanNameError } = await tenantClient
+        .from('plans')
+        .select('id')
+        .eq('name', globalPlan.name)
+        .maybeSingle();
+
+      if (tPlanNameError) {
+        console.error('Error checking plan by name in tenant DB:', tPlanNameError);
+        return res.status(400).json({ error: 'Failed to verify plan by name in tenant DB: ' + tPlanNameError.message });
+      }
+
+      if (tenantPlanByName) {
+        tenantPlanId = tenantPlanByName.id;
+        console.log(`Plan matched by name in tenant DB. Reusing existing tenant plan ID: ${tenantPlanId}`);
+      } else {
+        console.log(`Plan not found by ID or Name in tenant DB. Syncing from global...`);
+        const { error: planTransferError } = await tenantClient.from('plans').insert([globalPlan]);
+        if (planTransferError) {
+          console.error('Failed to copy plan to tenant DB:', planTransferError);
+          return res.status(400).json({ error: 'Failed to provision subscription plan in tenant database: ' + planTransferError.message });
+        }
+      }
+    } else {
+      console.log('Plan already exists in tenant DB by ID');
+    }
+
+    // 5.2 Mirror Company record
+    const { error: tenantCreateError } = await tenantClient
+      .from('companies')
+      .upsert([{ 
+        id: company.id,
+        name, 
+        contact_email, 
+        password_hash, 
+        plan_id: tenantPlanId, // Use the resolved ID (might be different if matched by name)
+        admin_name, 
+        logo_url: logo_url || null, 
+        requires_notary: requires_notary !== false, 
+        ai_analysis_method: ai_analysis_method || 'full',
+        tenant_db_url: tenant_db_url || null, 
+        tenant_db_anon_key: tenant_db_anon_key || null 
+      }]);
+      
+    if (tenantCreateError) {
+      console.error('Failed to mirror company in tenant DB:', tenantCreateError);
+      // Rollback global insert for atomicity if this is a fresh attempt
+      await supabase.from('companies').delete().eq('id', company.id);
+      return res.status(400).json({ error: 'Failed to mirror company record to tenant database: ' + tenantCreateError.message });
+    }
+    console.log('Successfully mirrored company in tenant DB');
+  }
+
+  // Step 6: Create admin user in Global DB
+  const { data: userData, error: userError } = await supabase.from('users').insert([{
     name: admin_name,
     email: contact_email,
     phone: '',
@@ -691,14 +753,52 @@ app.post('/companies', verifyStructure(['name', 'contact_email', 'password_hash'
     password: password_hash,
     company_id: company.id,
     status: 'active'
-  }]);
+  }]).select();
 
-  if (userError) {
-    return res.status(500).json({ error: 'Company created but failed to create admin user.' });
+  if (userError || !userData || userData.length === 0) {
+    console.error('Failed to create admin user in global DB:', userError);
+    // Cleanup
+    await supabase.from('companies').delete().eq('id', company.id);
+    if (tenantClient) {
+       await tenantClient.from('companies').delete().eq('id', company.id);
+    }
+    return res.status(500).json({ error: 'Failed to create platform admin user: ' + (userError?.message || 'Unknown error') });
+  }
+  const newUser = userData[0];
+  console.log(`Created global admin user: ${newUser.id}`);
+
+  // Step 7: Create admin user in Tenant DB
+  if (tenantClient) {
+    const { error: tenantUserError } = await tenantClient.from('users').upsert([{
+      id: newUser.id,
+      name: admin_name,
+      email: contact_email,
+      phone: '',
+      role: 'Owner',
+      password: password_hash,
+      company_id: company.id,
+      status: 'active'
+    }]);
+
+    if (tenantUserError) {
+      console.error('Failed to mirror admin user in tenant DB:', tenantUserError);
+      // Cleanup for consistency
+      await supabase.from('users').delete().eq('id', newUser.id);
+      await supabase.from('companies').delete().eq('id', company.id);
+      await tenantClient.from('companies').delete().eq('id', company.id);
+      return res.status(400).json({ error: 'Failed to mirror owner user to tenant database: ' + tenantUserError.message });
+    }
+    console.log('Successfully mirrored admin user in tenant DB');
   }
 
-  // Step 5: Send welcome email
-  await sendWelcomeEmail(name, contact_email, password_hash, `${process.env.FRONTEND_URL}`);
+  // Step 8: Send welcome email
+  try {
+    await sendWelcomeEmail(name, contact_email, password_hash, `${process.env.FRONTEND_URL}`);
+    console.log('Welcome email sent successfully');
+  } catch (emailErr) {
+    console.error('Failed to send welcome email:', emailErr);
+    // Non-fatal, we don't rollback for email failures
+  }
 
   res.status(201).json(companyData);
 });
@@ -2867,22 +2967,41 @@ app.get('/invoices', authenticateToken, async (req, res) => {
     }
 
     if (roleLower === 'admin') {
-      const [standardInvoices, customInvoices] = await Promise.all([
-        supabase.from('invoices').select('*'),
-        supabase.from('custom_invoices').select('*').eq('is_client', false)
-      ]);
+      const { data: companies, error: companiesError } = await supabase
+        .from('companies')
+        .select('id, tenant_db_url, tenant_db_anon_key');
 
-      if (standardInvoices.error || customInvoices.error) {
-        return res.status(400).json({ error: standardInvoices.error || customInvoices.error });
+      if (companiesError) {
+        return res.status(500).json({ error: 'Failed to fetch companies for admin' });
       }
 
-      const standard = (standardInvoices.data || []).map(inv => ({
+      let allStandard = [];
+      let allCustom = [];
+
+      await Promise.all(companies.map(async (company) => {
+        const tenantClient = getTenantClientFromCompany(company);
+        
+        // Use Promise.all with catch to prevent one failed tenant from breaking the whole query
+        const [standardRes, customRes] = await Promise.all([
+          tenantClient.from('invoices').select('*').eq('company_id', company.id).then(res => res).catch(err => ({ error: err })),
+          tenantClient.from('custom_invoices').select('*').eq('is_client', false).eq('company_id', company.id).then(res => res).catch(err => ({ error: err }))
+        ]);
+
+        if (standardRes && standardRes.data) {
+          allStandard.push(...standardRes.data);
+        }
+        if (customRes && customRes.data) {
+          allCustom.push(...customRes.data);
+        }
+      }));
+
+      const standard = allStandard.map(inv => ({
         ...inv,
         type: 'standard',
         invoice_month: inv.invoice_month || 'Unknown',
       }));
 
-      const custom = (customInvoices.data || []).map(inv => ({
+      const custom = allCustom.map(inv => ({
         ...inv,
         type: 'custom',
         invoice_month: 'Custom Invoice',
@@ -2911,16 +3030,25 @@ app.get('/check-invoice-submission', authenticateToken, async (req, res) => {
     let hasUnsubmitted = false;
 
     if (roleLower === 'admin') {
-      const { data: invoices, error } = await supabase
-        .from('invoices')
-        .select('is_submitted');
+      const { data: companies, error: companiesError } = await supabase
+        .from('companies')
+        .select('id, tenant_db_url, tenant_db_anon_key');
 
-      if (error) {
-        console.error('Supabase error (admin):', error);
-        return res.status(500).json({ message: 'Failed to fetch invoices' });
+      if (companiesError) {
+        return res.status(500).json({ message: 'Failed to fetch companies' });
       }
 
-      hasUnsubmitted = invoices.some(inv => inv.is_submitted !== true);
+      for (const company of (companies || [])) {
+        if (hasUnsubmitted) break; // Optimization
+        const tenantClient = getTenantClientFromCompany(company);
+        const { data: invoices, error } = await tenantClient
+          .from('invoices')
+          .select('is_submitted');
+        
+        if (!error && invoices && invoices.some(inv => inv.is_submitted !== true)) {
+          hasUnsubmitted = true;
+        }
+      }
     }
 
     else if (roleLower === 'owner') {
@@ -2953,12 +3081,16 @@ app.post('/submit-all-companies', authenticateToken, async (req, res) => {
     let error;
 
     if (roleLower === 'admin') {
-      const update = await supabase
-        .from('invoices')
-        .update({ is_submitted: true })
-        .not('id', 'is', null);
-
-      error = update.error;
+      const { data: companies } = await supabase.from('companies').select('id, tenant_db_url, tenant_db_anon_key');
+      
+      await Promise.all((companies || []).map(async (company) => {
+        const tenantClient = getTenantClientFromCompany(company);
+        const update = await tenantClient
+          .from('invoices')
+          .update({ is_submitted: true })
+          .not('id', 'is', null);
+        if (update.error) error = update.error;
+      }));
     }
 
     else if (roleLower === 'owner') {
@@ -2984,10 +3116,14 @@ app.post('/submit-all-companies', authenticateToken, async (req, res) => {
 
 app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   const invoiceId = req.params.id;
-  const { role, companyId, userId } = req.user;
+  const { role, companyId: userCompanyId, userId } = req.user;
+  const { company_id: payloadCompanyId } = req.body;
   const roleLower = role.toLowerCase();
 
-  let { data: invoice, error: fetchError } = await supabase
+  const targetCompanyId = (roleLower === 'admin' && payloadCompanyId) ? payloadCompanyId : userCompanyId;
+  const tenantClient = await getTenantClientFromId(targetCompanyId);
+
+  let { data: invoice, error: fetchError } = await tenantClient
     .from('invoices')
     .select('id, invoice_submitted')
     .eq('id', invoiceId)
@@ -2996,7 +3132,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   if (invoice) {
     if (roleLower === 'admin') {
       if (invoice.invoice_submitted === true) {
-        const { data, error } = await supabase
+        const { data, error } = await tenantClient
           .from('invoices')
           .update({ invoice_submitted_admin: true })
           .eq('id', invoiceId)
@@ -3006,7 +3142,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: 'Invoice must be submitted first by the company.' });
       }
     } else {
-      const { data, error } = await supabase
+      const { data, error } = await tenantClient
         .from('invoices')
         .update({ invoice_submitted: true })
         .eq('id', invoiceId)
@@ -3014,18 +3150,19 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
       if (error) return res.status(400).json(error);
 
+      // companies table is in global config
       await supabase.from('companies').update({
         last_invoice_paid: new Date().toISOString(),
         document_shared: 0,
         document_downloaded: 0,
         document_uploaded: 0
-      }).eq('id', companyId);
+      }).eq('id', targetCompanyId);
 
       return res.json({ message: 'Invoice submitted successfully.', data });
     }
   }
 
-  const { data: customInvoice, error: customError } = await supabase
+  const { data: customInvoice, error: customError } = await tenantClient
     .from('custom_invoices')
     .select('id, is_client, invoice_submitted, invoice_submitted_admin')
     .eq('id', invoiceId)
@@ -3034,7 +3171,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   if (customInvoice) {
     if (roleLower === 'client') {
       if (customInvoice.is_client) {
-        const { data, error } = await supabase
+        const { data, error } = await tenantClient
           .from('custom_invoices')
           .update({ invoice_submitted: true })
           .eq('id', invoiceId)
@@ -3047,7 +3184,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
     if (roleLower === 'owner') {
       if (customInvoice.is_client && customInvoice.invoice_submitted) {
-        const { data, error } = await supabase
+        const { data, error } = await tenantClient
           .from('custom_invoices')
           .update({ invoice_submitted_admin: true })
           .eq('id', invoiceId)
@@ -3056,7 +3193,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
       }
 
       if (!customInvoice.is_client) {
-        const { data, error } = await supabase
+        const { data, error } = await tenantClient
           .from('custom_invoices')
           .update({ invoice_submitted: true })
           .eq('id', invoiceId)
@@ -3067,7 +3204,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
     if (roleLower === 'admin') {
       if (customInvoice.invoice_submitted === true) {
-        const { data, error } = await supabase
+        const { data, error } = await tenantClient
           .from('custom_invoices')
           .update({ invoice_submitted_admin: true })
           .eq('id', invoiceId)
@@ -3080,8 +3217,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   }
 
   // 3. Try client_invoices
-  // 3. Try client_invoices
-  const { data: clientInvoice, error: clientInvoiceError } = await supabase
+  const { data: clientInvoice, error: clientInvoiceError } = await tenantClient
     .from('client_invoices')
     .select('id, invoice_submitted, invoice_submitted_admin')
     .eq('id', invoiceId)
@@ -3090,7 +3226,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
   if (clientInvoice) {
     if (roleLower === 'client') {
       // Mark invoice_submitted true
-      const { data, error } = await supabase
+      const { data, error } = await tenantClient
         .from('client_invoices')
         .update({ invoice_submitted: true })
         .eq('id', invoiceId)
@@ -3098,16 +3234,15 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
       if (error) return res.status(400).json(error);
 
-      const updateFields = {
-        document_shared: 0,
-        document_downloaded: 0,
-        document_uploaded: 0,
-        last_invoice_paid: new Date().toISOString()
-      };
-
-      const { error: updateError } = await supabase
+      // Update client stats
+      const { error: updateError } = await tenantClient
         .from('clients')
-        .update(updateFields)
+        .update({
+          document_shared: 0,
+          document_downloaded: 0,
+          document_uploaded: 0,
+          last_invoice_paid: new Date().toISOString()
+        })
         .eq('id', userId);
 
       if (updateError) return res.status(400).json(updateError);
@@ -3117,7 +3252,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
 
     if (roleLower === 'owner') {
       if (clientInvoice.invoice_submitted === true) {
-        const { data, error } = await supabase
+        const { data, error } = await tenantClient
           .from('client_invoices')
           .update({ invoice_submitted_admin: true })
           .eq('id', invoiceId)
@@ -3129,6 +3264,7 @@ app.put('/invoices/:id/submit', authenticateToken, async (req, res) => {
       }
     }
   }
+  
   // 4. If not found in any table
   return res.status(404).json({ error: 'Invoice not found in any table.' });
 });
@@ -3620,9 +3756,56 @@ app.put('/disputes/:id/resolve', authenticateToken, async (req, res) => {
 });
 
 app.get('/stats', authenticateToken, async (req, res) => {
-  const { companyId } = req.user;
+  const { companyId, role } = req.user;
+  const roleLower = role?.toLowerCase();
   try {
-    // 1. Get all invoices for this company
+    if (roleLower === 'admin') {
+      const { data: companies, error: companiesError } = await supabase
+        .from('companies')
+        .select('id, tenant_db_url, tenant_db_anon_key');
+
+      if (companiesError) {
+        return res.status(500).json({ error: 'Failed to fetch companies for stats' });
+      }
+
+      let totalInvoiceAmt = 0;
+      let totalDocsUploaded = 0;
+      let totalDocsPublished = 0;
+      let totalDocsDraft = 0;
+
+      await Promise.all((companies || []).map(async (company) => {
+        const tenantClient = getTenantClientFromCompany(company);
+
+        // 1. Invoices
+        const { data: invoices } = await tenantClient.from('invoices').select('invoice_value').eq('company_id', company.id);
+        if (invoices) {
+          totalInvoiceAmt += invoices.reduce((sum, inv) => sum + parseFloat(inv.invoice_value || 0), 0);
+        }
+
+        // 2. Custom Invoices
+        const { data: customInvoices } = await tenantClient.from('custom_invoices').select('total').eq('company_id', company.id).eq('is_client', false);
+        if (customInvoices) {
+          totalInvoiceAmt += customInvoices.reduce((sum, inv) => sum + parseFloat(inv.total || 0), 0);
+        }
+
+        // 3. Documents
+        const { data: documents } = await tenantClient.from('documents').select('is_published, status, progress_number').eq('company_id', company.id);
+        if (documents) {
+          totalDocsUploaded += documents.length;
+          totalDocsDraft += documents.filter(doc => (doc.status?.toLowerCase() === 'draft' || doc.progress_number === 0)).length;
+          totalDocsPublished += documents.filter(doc => doc.status?.toLowerCase() === 'complete' || (doc.progress_number === 3 && doc.is_published === true)).length;
+        }
+      }));
+
+      return res.status(200).json({
+        totalInvoiceAmount: totalInvoiceAmt.toFixed(2),
+        totalDocumentsUploaded: totalDocsUploaded,
+        totalDocumentsPublished: totalDocsPublished,
+        totalDocumentsDraft: totalDocsDraft
+      });
+    }
+
+    // Owner view
     const { data: invoices, error: invoiceError } = await supabase
       .from('invoices')
       .select('invoice_value')
@@ -3679,6 +3862,7 @@ app.get('/stats', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Unexpected error', message: err.message });
   }
 });
+
 
 app.get('/client-overview-metrics', authenticateToken, async (req, res) => {
   const { companyId } = req.user;
@@ -3886,6 +4070,8 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
 
   let admin_name = null;
   let recipient_email = null;
+  const targetCompanyId = role === "admin" ? company_id : companyId;
+  const tenantClient = await getTenantClientFromId(targetCompanyId);
 
   if (role === "admin") {
     const { data: companyData, error: companyError } = await supabase
@@ -3903,7 +4089,7 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
   }
 
   if (role === "owner") {
-    const { data: clientData, error: clientError } = await supabase
+    const { data: clientData, error: clientError } = await tenantClient
       .from('clients')
       .select('email')
       .eq('id', user_id)
@@ -3917,10 +4103,10 @@ app.post('/custom-invoice', authenticateToken, async (req, res) => {
   }
 
   // Insert invoice
-  const { data, error } = await supabase
+  const { data, error } = await tenantClient
     .from('custom_invoices')
     .insert([{
-      company_id: role === "admin" ? company_id : companyId,
+      company_id: targetCompanyId,
       is_client: role === "admin" ? false : true,
       date,
       user_id,
